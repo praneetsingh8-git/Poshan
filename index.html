@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Poshan — Weekly Meals</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js" defer></script>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -341,7 +341,16 @@ body {
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <!-- Shown immediately before JS loads -->
+  <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fdf6fa;font-family:sans-serif;">
+    <div style="text-align:center;">
+      <div style="font-size:40px;margin-bottom:12px;">🌸</div>
+      <div style="font-size:28px;color:#8a3a6e;font-weight:500;margin-bottom:6px;">Poshan</div>
+      <div style="font-size:13px;color:#b0a0b8;">Loading…</div>
+    </div>
+  </div>
+</div>
 <script>
 // ════════════════════════════════════════════════════════════════════
 // CONFIG — replace these 3 values after Supabase setup
@@ -374,7 +383,7 @@ if (!isConfigured) {
         <div style="margin-top:16px;font-size:12px;color:#b0a0b8;">Coming soon to east GTA families 💕</div>
       </div>
     </div>`
-  throw new Error('Supabase not configured — see SETUP.md')
+  return // Stop here — show setup message only
 }
 
 // ════════════════════════════════════════════════════════════════════
@@ -969,19 +978,44 @@ document.addEventListener('change', async (e) => {
 // BOOT
 // ════════════════════════════════════════════════════════════════════
 async function boot() {
-  render() // show loading state first
-  await Promise.all([loadMenu(), loadExtras()])
-  // check if admin is already logged in
-  const { data: { session } } = await db.auth.getSession()
-  if (session?.user?.email === CFG.adminEmail) {
-    S.adminUser = session.user
-    await loadAllOrders()
-    S.view = 'admin-dashboard'
+  try {
+    render()
+    await Promise.all([loadMenu(), loadExtras()])
+    const { data: { session } } = await db.auth.getSession()
+    if (session?.user?.email === CFG.adminEmail) {
+      S.adminUser = session.user
+      await loadAllOrders()
+      S.view = 'admin-dashboard'
+    }
+    render()
+  } catch(err) {
+    console.error('Poshan boot error:', err)
+    document.getElementById('root').innerHTML = `
+      <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fdf6fa;font-family:sans-serif;padding:24px;">
+        <div style="max-width:400px;text-align:center;">
+          <div style="font-size:40px;margin-bottom:12px;">🌸</div>
+          <div style="font-size:26px;color:#8a3a6e;font-weight:500;margin-bottom:8px;">Poshan</div>
+          <div style="background:#fff;border:1px solid #ead8ea;border-radius:12px;padding:20px;text-align:left;margin-top:16px;">
+            <div style="font-weight:600;color:#2a1f2e;margin-bottom:8px;">⚙️ Database not connected yet</div>
+            <div style="font-size:13px;color:#7a6080;line-height:1.7;">
+              The site is live! The database just needs connecting.<br><br>
+              Follow the <strong>SETUP.md</strong> instructions to connect Supabase, then update the 3 config values in index.html.
+            </div>
+          </div>
+          <div style="margin-top:12px;font-size:12px;color:#b0a0b8;">Coming soon to east GTA 💕</div>
+        </div>
+      </div>`
   }
-  render()
 }
 
-boot()
+// Wait for Supabase to load (deferred), then boot
+window.addEventListener('load', () => {
+  if (typeof supabase !== 'undefined') {
+    boot()
+  } else {
+    setTimeout(boot, 1000)
+  }
+})
 </script>
 </body>
 </html>
