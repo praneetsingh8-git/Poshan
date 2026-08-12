@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Poshan — Weekly Meals</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --pink:        #f4b9d7;
+  --pink-light:  #fde8f3;
+  --pink-dark:   #c06090;
+  --pink-deep:   #8a3a6e;
+  --blue:        #b4d2f1;
+  --blue-light:  #e8f3fd;
+  --lilac:       #d4b0e8;
+  --lilac-light: #f3e8fd;
+  --text:        #2a1f2e;
+  --text-mid:    #7a6080;
+  --text-light:  #b0a0b8;
+  --border:      #ead8ea;
+  --cream:       #fdf6fa;
+  --white:       #ffffff;
+  --green:       #4a8050;
+  --green-light: #edfde8;
+  --amber:       #ba7517;
+  --amber-light: #faeeda;
+  --red:         #c03030;
+  --red-light:   #fdeaea;
+  --radius:      12px;
+  --shadow:      0 2px 16px rgba(180,140,180,0.12);
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  font-family: 'Jost', sans-serif;
+  background: var(--cream);
+  color: var(--text);
+  min-height: 100vh;
+  font-size: 15px;
+}
+#root { min-height: 100vh; }
+
+/* ── LAYOUT ── */
+.page { max-width: 480px; margin: 0 auto; padding: 24px 16px 80px; }
+.page-wide { max-width: 900px; margin: 0 auto; padding: 24px 20px 80px; }
+
+/* ── HEADER ── */
+.site-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; background: var(--white);
+  border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 100;
+}
+.header-logo {
+  display: flex; align-items: center; gap: 10px;
+}
+.header-mark {
+  width: 32px; height: 32px;
+}
+.header-brand {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 22px; font-weight: 500; color: var(--pink-deep);
+}
+.header-link {
+  font-size: 12px; color: var(--text-light); cursor: pointer;
+  text-decoration: underline; background: none; border: none;
+  font-family: 'Jost', sans-serif;
+}
+.header-link:hover { color: var(--pink-dark); }
+
+/* ── BUTTONS ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 8px; padding: 13px 24px; border-radius: 100px;
+  font-family: 'Jost', sans-serif; font-size: 14px; font-weight: 500;
+  cursor: pointer; border: none; transition: all 0.15s; text-align: center;
+}
+.btn-primary {
+  background: linear-gradient(135deg, #e87ab0 0%, #b095d0 100%);
+  color: var(--white);
+  box-shadow: 0 4px 16px rgba(200,120,170,0.3);
+}
+.btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(200,120,170,0.4); }
+.btn-secondary {
+  background: var(--white); color: var(--pink-deep);
+  border: 1.5px solid var(--pink);
+}
+.btn-secondary:hover { background: var(--pink-light); }
+.btn-ghost {
+  background: transparent; color: var(--text-mid);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { background: var(--white); }
+.btn-danger { background: var(--red-light); color: var(--red); border: 1px solid #f0c0c0; }
+.btn-sm { padding: 8px 16px; font-size: 12px; }
+.btn-full { width: 100%; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+
+/* ── CARDS ── */
+.card {
+  background: var(--white); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 20px;
+  box-shadow: var(--shadow);
+}
+.card + .card { margin-top: 12px; }
+.card-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 18px; font-weight: 500; color: var(--text);
+  margin-bottom: 4px;
+}
+.card-sub { font-size: 12px; color: var(--text-light); margin-bottom: 16px; }
+
+/* ── FORMS ── */
+.field { margin-bottom: 16px; }
+.field label {
+  display: block; font-size: 12px; font-weight: 500;
+  color: var(--text-mid); letter-spacing: 0.06em;
+  text-transform: uppercase; margin-bottom: 6px;
+}
+.field input, .field textarea, .field select {
+  width: 100%; padding: 12px 14px;
+  border: 1.5px solid var(--border); border-radius: 10px;
+  font-family: 'Jost', sans-serif; font-size: 14px; color: var(--text);
+  background: var(--white); outline: none; transition: border-color 0.15s;
+}
+.field input:focus, .field textarea:focus, .field select:focus {
+  border-color: var(--pink-dark);
+}
+.field textarea { resize: vertical; min-height: 80px; }
+.field-hint { font-size: 11px; color: var(--text-light); margin-top: 4px; }
+
+/* ── HERO ── */
+.hero { text-align: center; padding: 48px 20px 32px; }
+.hero-mark { width: 72px; height: 72px; margin: 0 auto 20px; display: block; }
+.hero-title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 40px; font-weight: 600; color: var(--text);
+  line-height: 1.1; margin-bottom: 8px;
+}
+.hero-title span { color: var(--pink-dark); font-style: italic; }
+.hero-sub { font-size: 14px; color: var(--text-mid); line-height: 1.7; margin-bottom: 32px; max-width: 320px; margin-left: auto; margin-right: auto; }
+.hero-actions { display: flex; flex-direction: column; gap: 10px; max-width: 280px; margin: 0 auto; }
+.hero-week {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--pink-light); color: var(--pink-deep);
+  border-radius: 100px; padding: 6px 14px; font-size: 12px;
+  font-weight: 500; margin-bottom: 24px;
+}
+
+/* ── DAY CARDS ── */
+.day-grid { display: flex; flex-direction: column; gap: 10px; }
+.day-card {
+  border: 1.5px solid var(--border); border-radius: var(--radius);
+  background: var(--white); overflow: hidden; transition: all 0.15s;
+}
+.day-card.selected { border-color: var(--pink-dark); background: var(--pink-light); }
+.day-card.no-menu { opacity: 0.5; pointer-events: none; }
+.day-card-header {
+  display: flex; align-items: center; gap: 12px;
+  padding: 14px 16px; cursor: pointer;
+}
+.day-checkbox {
+  width: 20px; height: 20px; border-radius: 6px;
+  border: 2px solid var(--border); flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+}
+.day-card.selected .day-checkbox {
+  background: var(--pink-dark); border-color: var(--pink-dark);
+}
+.day-check-icon { display: none; }
+.day-card.selected .day-check-icon { display: block; }
+.day-name { font-weight: 600; font-size: 14px; flex-shrink: 0; width: 90px; }
+.day-dishes { flex: 1; }
+.day-main { font-size: 14px; color: var(--text); }
+.day-side { font-size: 12px; color: var(--text-light); margin-top: 2px; }
+.day-tag {
+  font-size: 10px; font-weight: 600; padding: 3px 8px;
+  border-radius: 100px; background: var(--pink-light);
+  color: var(--pink-dark); flex-shrink: 0;
+}
+
+/* ── EXTRAS ── */
+.extras-grid { display: flex; flex-direction: column; gap: 8px; }
+.extra-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--white);
+}
+.extra-info { flex: 1; }
+.extra-name { font-size: 14px; font-weight: 500; }
+.extra-desc { font-size: 11px; color: var(--text-light); margin-top: 2px; }
+.extra-price { font-size: 12px; color: var(--pink-dark); font-weight: 500; flex-shrink: 0; }
+.qty-control { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.qty-btn {
+  width: 28px; height: 28px; border-radius: 8px;
+  border: 1.5px solid var(--border); background: var(--white);
+  cursor: pointer; font-size: 16px; display: flex;
+  align-items: center; justify-content: center; font-weight: 500;
+  transition: all 0.1s; color: var(--text-mid);
+}
+.qty-btn:hover { border-color: var(--pink-dark); color: var(--pink-dark); }
+.qty-num { font-size: 14px; font-weight: 600; min-width: 20px; text-align: center; }
+
+/* ── ORDER SUMMARY ── */
+.summary-box {
+  background: var(--pink-light); border: 1px solid var(--pink);
+  border-radius: var(--radius); padding: 16px; margin-top: 16px;
+}
+.summary-title { font-size: 12px; font-weight: 600; color: var(--pink-deep); letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px; }
+.summary-row { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 6px; }
+.summary-row.total { font-weight: 600; border-top: 1px solid var(--pink); padding-top: 8px; margin-top: 4px; font-size: 14px; }
+.summary-empty { font-size: 13px; color: var(--text-light); text-align: center; padding: 8px 0; }
+
+/* ── TOGGLE ── */
+.toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 0; border-top: 1px solid var(--border);
+}
+.toggle-label { font-size: 14px; }
+.toggle-sub { font-size: 12px; color: var(--text-light); margin-top: 2px; }
+.toggle {
+  width: 44px; height: 24px; border-radius: 12px;
+  background: var(--border); border: none; cursor: pointer;
+  position: relative; transition: background 0.2s;
+}
+.toggle.on { background: var(--pink-dark); }
+.toggle::after {
+  content: ''; position: absolute; width: 20px; height: 20px;
+  border-radius: 50%; background: white; top: 2px; left: 2px;
+  transition: transform 0.2s; box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+}
+.toggle.on::after { transform: translateX(20px); }
+
+/* ── TABS ── */
+.tabs { display: flex; gap: 4px; background: var(--cream); border-radius: 12px; padding: 4px; margin-bottom: 20px; }
+.tab-btn {
+  flex: 1; padding: 10px; border: none; border-radius: 10px;
+  font-family: 'Jost', sans-serif; font-size: 13px; font-weight: 500;
+  cursor: pointer; background: transparent; color: var(--text-mid);
+  transition: all 0.15s;
+}
+.tab-btn.active { background: var(--white); color: var(--pink-deep); box-shadow: var(--shadow); }
+
+/* ── STATUS BADGES ── */
+.badge {
+  display: inline-flex; align-items: center; padding: 3px 10px;
+  border-radius: 100px; font-size: 11px; font-weight: 600;
+}
+.badge-pending  { background: var(--amber-light); color: var(--amber); }
+.badge-confirmed { background: var(--blue-light); color: #2a5a8a; }
+.badge-delivered { background: var(--green-light); color: var(--green); }
+
+/* ── ORDERS TABLE (admin) ── */
+.orders-table { width: 100%; border-collapse: collapse; }
+.orders-table th {
+  text-align: left; font-size: 11px; font-weight: 600;
+  color: var(--text-light); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+}
+.orders-table td { padding: 12px; border-bottom: 1px solid #f5eef5; font-size: 13px; vertical-align: top; }
+.orders-table tr:last-child td { border-bottom: none; }
+.orders-table tr:hover td { background: var(--cream); }
+.order-days { display: flex; gap: 4px; flex-wrap: wrap; }
+.day-chip {
+  font-size: 10px; font-weight: 500; padding: 2px 7px;
+  border-radius: 6px; background: var(--pink-light); color: var(--pink-deep);
+}
+.status-select {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 4px 8px; font-size: 12px; font-family: 'Jost', sans-serif;
+  background: var(--white); cursor: pointer;
+}
+
+/* ── ADMIN MENU EDITOR ── */
+.menu-day-editor {
+  border: 1.5px solid var(--border); border-radius: var(--radius);
+  padding: 16px; background: var(--white); margin-bottom: 10px;
+}
+.menu-day-label {
+  font-weight: 600; font-size: 14px; margin-bottom: 12px;
+  color: var(--pink-deep);
+}
+.input-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mini-field { margin-bottom: 0; }
+.mini-field label { font-size: 11px; color: var(--text-light); margin-bottom: 4px; display: block; }
+.mini-field input, .mini-field textarea {
+  width: 100%; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px;
+  font-family: 'Jost', sans-serif; font-size: 13px; color: var(--text);
+  background: var(--cream); outline: none;
+}
+.mini-field input:focus, .mini-field textarea:focus { border-color: var(--pink-dark); background: var(--white); }
+
+/* ── ALERTS ── */
+.alert {
+  padding: 12px 16px; border-radius: 10px; font-size: 13px;
+  margin-bottom: 16px;
+}
+.alert-error { background: var(--red-light); color: var(--red); border: 1px solid #f0c0c0; }
+.alert-success { background: var(--green-light); color: var(--green); border: 1px solid #c0e0c0; }
+.alert-info { background: var(--blue-light); color: #2a5a8a; border: 1px solid var(--blue); }
+
+/* ── LOADING ── */
+.loading-wrap { display: flex; align-items: center; justify-content: center; padding: 60px 20px; flex-direction: column; gap: 12px; }
+.spinner { width: 32px; height: 32px; border: 3px solid var(--border); border-top-color: var(--pink-dark); border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-text { font-size: 13px; color: var(--text-light); }
+
+/* ── SUCCESS ── */
+.success-wrap { text-align: center; padding: 48px 20px; }
+.success-icon {
+  width: 64px; height: 64px; border-radius: 50%;
+  background: var(--green-light); display: flex;
+  align-items: center; justify-content: center;
+  margin: 0 auto 20px; font-size: 28px;
+}
+.success-title { font-family: 'Cormorant Garamond', serif; font-size: 28px; font-weight: 600; margin-bottom: 8px; }
+.success-sub { font-size: 14px; color: var(--text-mid); line-height: 1.7; }
+
+/* ── EMPTY STATE ── */
+.empty { text-align: center; padding: 40px 20px; color: var(--text-light); }
+.empty-icon { font-size: 40px; margin-bottom: 12px; }
+.empty-text { font-size: 14px; }
+
+/* ── SECTION HEADERS ── */
+.section-head { margin: 24px 0 12px; }
+.section-head h3 { font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 500; }
+.section-head p { font-size: 12px; color: var(--text-light); margin-top: 2px; }
+
+/* ── DIVIDER ── */
+.divider { height: 1px; background: var(--border); margin: 20px 0; }
+
+/* ── PREGNANCY BADGE ── */
+.pregnancy-badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: var(--pink-light); color: var(--pink-deep);
+  border-radius: 100px; padding: 4px 10px; font-size: 11px; font-weight: 600;
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+// ════════════════════════════════════════════════════════════════════
+// CONFIG — replace these 3 values after Supabase setup
+// ════════════════════════════════════════════════════════════════════
+const CFG = {
+  url:        'YOUR_SUPABASE_URL',        // from Supabase → Settings → API
+  key:        'YOUR_SUPABASE_ANON_KEY',   // from Supabase → Settings → API
+  adminEmail: 'YOUR_EMAIL@gmail.com'      // your login email for admin
+}
+
+// ════════════════════════════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════════════════════════════
+const { createClient } = supabase
+const db = createClient(CFG.url, CFG.key)
+const DAYS = ['monday','tuesday','wednesday','thursday','friday','saturday']
+const DAY_LABELS = { monday:'Monday', tuesday:'Tuesday', wednesday:'Wednesday', thursday:'Thursday', friday:'Friday', saturday:'Saturday' }
+
+// ════════════════════════════════════════════════════════════════════
+// STATE
+// ════════════════════════════════════════════════════════════════════
+let S = {
+  view: 'landing',
+  customer: null,
+  adminUser: null,
+  weeklyMenu: null,
+  extras: [],
+  sel: { days: new Set(), extras: {}, notes: '', pregnancy: false },
+  existingOrder: null,
+  allOrders: [],
+  adminTab: 'menu',
+  menuDraft: {},
+  loading: false,
+  error: null,
+  msg: null
+}
+
+// ════════════════════════════════════════════════════════════════════
+// HELPERS
+// ════════════════════════════════════════════════════════════════════
+function weekStart() {
+  const d = new Date()
+  const day = d.getDay()
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
+  return new Date(new Date().setDate(diff)).toISOString().split('T')[0]
+}
+
+function fmtWeek(ds) {
+  if (!ds) return ''
+  const d = new Date(ds + 'T12:00:00')
+  const e = new Date(d); e.setDate(e.getDate() + 5)
+  const opt = { month: 'short', day: 'numeric' }
+  return `${d.toLocaleDateString('en-CA', opt)} – ${e.toLocaleDateString('en-CA', opt)}`
+}
+
+function cap(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : '' }
+
+function extraTotal() {
+  return Object.entries(S.sel.extras).reduce((sum, [id, qty]) => {
+    const ex = S.extras.find(e => e.id === id)
+    return sum + (ex ? ex.price * qty : 0)
+  }, 0)
+}
+
+// ════════════════════════════════════════════════════════════════════
+// DATA
+// ════════════════════════════════════════════════════════════════════
+async function loadMenu() {
+  const { data } = await db.from('weekly_menu').select('*').eq('week_start', weekStart()).maybeSingle()
+  S.weeklyMenu = data
+  if (data?.menu) S.menuDraft = JSON.parse(JSON.stringify(data.menu))
+}
+
+async function loadExtras() {
+  const { data } = await db.from('extras').select('*').eq('available', true).order('name')
+  S.extras = data || []
+}
+
+async function checkExistingOrder(phone) {
+  const { data } = await db.from('orders').select('*').eq('customer_phone', phone).eq('week_start', weekStart()).maybeSingle()
+  S.existingOrder = data
+}
+
+async function submitOrder() {
+  const extrasArr = Object.entries(S.sel.extras).filter(([,q]) => q > 0).map(([id, qty]) => {
+    const ex = S.extras.find(e => e.id === id)
+    return { id, name: ex?.name || '', qty, price: ex?.price || 0 }
+  })
+  const { error } = await db.from('orders').insert({
+    customer_name: S.customer.name,
+    customer_phone: S.customer.phone,
+    week_start: weekStart(),
+    delivery_days: [...S.sel.days],
+    extras: extrasArr,
+    pregnancy_plan: S.sel.pregnancy,
+    notes: S.sel.notes,
+    status: 'pending'
+  })
+  return !error
+}
+
+async function saveMenu() {
+  const { error } = await db.from('weekly_menu').upsert({ week_start: weekStart(), menu: S.menuDraft }, { onConflict: 'week_start' })
+  return !error
+}
+
+async function loadAllOrders() {
+  const { data } = await db.from('orders').select('*').eq('week_start', weekStart()).order('created_at', { ascending: false })
+  S.allOrders = data || []
+}
+
+async function updateStatus(id, status) {
+  await db.from('orders').update({ status }).eq('id', id)
+  await loadAllOrders()
+  render()
+}
+
+// ════════════════════════════════════════════════════════════════════
+// SVG LOGO MARK
+// ════════════════════════════════════════════════════════════════════
+function logoMark(size = 40) {
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" fill="none">
+    <path d="M32 8 C18 8 10 20 10 32 C10 46 20 58 32 58 C44 58 54 46 54 32 C54 20 46 8 32 8Z" fill="#f3e0f0"/>
+    <path d="M32 14 C21 14 16 23 16 32 C16 43 23 52 32 52 C41 52 48 43 48 32 C48 23 43 14 32 14Z" fill="url(#lg)"/>
+    <path d="M32 20 C26 26 24 36 28 44" stroke="rgba(255,255,255,0.5)" stroke-width="1" stroke-linecap="round"/>
+    <circle cx="32" cy="10" r="3.5" fill="#e087c0"/>
+    <defs><radialGradient id="lg" cx="40%" cy="35%" r="65%"><stop offset="0%" stop-color="#f4b9d7"/><stop offset="100%" stop-color="#9850a0"/></radialGradient></defs>
+  </svg>`
+}
+
+// ════════════════════════════════════════════════════════════════════
+// VIEWS
+// ════════════════════════════════════════════════════════════════════
+
+function vHeader(showAdmin = true) {
+  return `<header class="site-header">
+    <div class="header-logo">
+      ${logoMark(32)}
+      <span class="header-brand">Poshan</span>
+    </div>
+    ${S.adminUser ? `<button class="header-link" data-action="admin-logout">Sign out</button>`
+      : showAdmin ? `<button class="header-link" data-action="go-admin">Admin</button>` : ''}
+  </header>`
+}
+
+function vLanding() {
+  const week = S.weeklyMenu ? `<div class="hero-week">🌸 Menu set for ${fmtWeek(S.weeklyMenu.week_start)}</div>` : '<div class="hero-week">⏳ This week\'s menu coming soon</div>'
+  return `
+  ${vHeader()}
+  <div class="page">
+    <div class="hero">
+      ${logoMark(72)}
+      <h1 class="hero-title">Nourishment<br>for <span>two.</span></h1>
+      <p class="hero-sub">Fresh Indian tiffins for expecting families in east GTA. Delivered before your day begins.</p>
+      ${week}
+      <div class="hero-actions">
+        <button class="btn btn-primary btn-full" data-action="go-customer">Order This Week's Meals</button>
+        <p style="font-size:12px;color:var(--text-light);text-align:center;">Scarborough · Pickering · Ajax · Whitby · Oshawa</p>
+      </div>
+    </div>
+  </div>`
+}
+
+function vCustomerForm() {
+  return `
+  ${vHeader()}
+  <div class="page">
+    <div style="margin-top:24px;">
+      <h2 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:500;margin-bottom:4px;">Your details</h2>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:24px;">No account needed. Just your name and phone.</p>
+      ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+      <div class="card">
+        <div class="field">
+          <label>Your name</label>
+          <input type="text" id="inp-name" placeholder="e.g. Priya" autocomplete="name" />
+        </div>
+        <div class="field">
+          <label>Phone number</label>
+          <input type="tel" id="inp-phone" placeholder="+1 (416) 000-0000" autocomplete="tel" />
+          <p class="field-hint">We'll use this to find your order next time.</p>
+        </div>
+        <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="customer-lookup" ${S.loading ? 'disabled' : ''}>
+          ${S.loading ? 'Looking up…' : 'Continue →'}
+        </button>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:12px;">← Back</button>
+    </div>
+  </div>`
+}
+
+function vCustomerMenu() {
+  const menu = S.weeklyMenu?.menu || {}
+  const hasMenu = Object.keys(menu).length > 0
+
+  if (!hasMenu) {
+    return `
+    ${vHeader()}
+    <div class="page">
+      <div class="empty" style="margin-top:60px;">
+        <div class="empty-icon">🍱</div>
+        <div class="empty-text">This week's menu hasn't been set yet.<br>Please check back soon!</div>
+        <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:20px;">← Home</button>
+      </div>
+    </div>`
+  }
+
+  const dayCards = DAYS.map(day => {
+    const d = menu[day]
+    if (!d?.main) return `<div class="day-card no-menu">
+      <div class="day-card-header">
+        <div class="day-checkbox"></div>
+        <div class="day-name">${DAY_LABELS[day]}</div>
+        <div class="day-main" style="color:var(--text-light);font-size:13px;">No delivery</div>
+      </div>
+    </div>`
+    const sel = S.sel.days.has(day)
+    return `<div class="day-card ${sel ? 'selected' : ''}" data-action="toggle-day" data-day="${day}">
+      <div class="day-card-header">
+        <div class="day-checkbox">
+          <svg class="day-check-icon" width="12" height="12" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
+        </div>
+        <div class="day-name">${DAY_LABELS[day]}</div>
+        <div class="day-dishes">
+          <div class="day-main">${d.main}</div>
+          ${d.side ? `<div class="day-side">${d.side}</div>` : ''}
+        </div>
+        ${d.protein ? `<span class="day-tag">${d.protein}</span>` : ''}
+      </div>
+    </div>`
+  }).join('')
+
+  const extrasHtml = S.extras.length ? `
+    <div class="section-head"><h3>Extras</h3><p>Add to any delivery day</p></div>
+    <div class="extras-grid">
+      ${S.extras.map(ex => `<div class="extra-row">
+        <div class="extra-info">
+          <div class="extra-name">${ex.name}</div>
+          ${ex.description ? `<div class="extra-desc">${ex.description}</div>` : ''}
+        </div>
+        ${ex.price > 0 ? `<div class="extra-price">+$${ex.price.toFixed(2)}</div>` : ''}
+        <div class="qty-control">
+          <button class="qty-btn" data-action="extra-remove" data-id="${ex.id}">−</button>
+          <span class="qty-num">${S.sel.extras[ex.id] || 0}</span>
+          <button class="qty-btn" data-action="extra-add" data-id="${ex.id}">+</button>
+        </div>
+      </div>`).join('')}
+    </div>` : ''
+
+  const selectedDays = [...S.sel.days]
+  const extrasTotal = extraTotal()
+  const summaryHtml = selectedDays.length === 0 ? `<div class="summary-empty">Select delivery days above</div>` :
+    `${selectedDays.map(d => `<div class="summary-row"><span>${DAY_LABELS[d]}</span><span>${menu[d]?.main || '—'}</span></div>`).join('')}
+     ${Object.entries(S.sel.extras).filter(([,q])=>q>0).map(([id,qty])=>{
+       const ex = S.extras.find(e=>e.id===id)
+       return `<div class="summary-row"><span>${ex?.name} ×${qty}</span><span>${ex?.price > 0 ? '+$'+(ex.price*qty).toFixed(2) : 'Free'}</span></div>`
+     }).join('')}
+     <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''} selected</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '✓'}</span></div>`
+
+  return `
+  ${vHeader(false)}
+  <div class="page">
+    <div style="margin-top:20px;">
+      <p style="font-size:12px;color:var(--text-light);">Week of ${fmtWeek(S.weeklyMenu?.week_start)}</p>
+      <h2 style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:500;margin-bottom:4px;">This week's menu</h2>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:20px;">Select the days you'd like delivery, ${S.customer?.name || 'friend'}.</p>
+
+      ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+
+      <div class="day-grid">${dayCards}</div>
+
+      ${extrasHtml}
+
+      <div class="section-head" style="margin-top:24px;"><h3>Preferences</h3></div>
+      <div class="card">
+        <div class="toggle-row">
+          <div>
+            <div class="toggle-label">🌸 Pregnancy meal plan</div>
+            <div class="toggle-sub">Marks your order for pregnancy-specific portioning</div>
+          </div>
+          <button class="toggle ${S.sel.pregnancy ? 'on' : ''}" data-action="toggle-pregnancy"></button>
+        </div>
+        <div class="divider"></div>
+        <div class="field" style="margin-bottom:0;">
+          <label>Special notes</label>
+          <textarea id="notes-field" placeholder="Dietary restrictions, spice level, allergies…">${S.sel.notes}</textarea>
+        </div>
+      </div>
+
+      <div class="section-head" style="margin-top:20px;"><h3>Order summary</h3></div>
+      <div class="summary-box">${summaryHtml}</div>
+
+      <button class="btn btn-primary btn-full ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}"
+        data-action="submit-order" ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}
+        style="margin-top:16px;">
+        ${S.loading ? 'Placing order…' : selectedDays.length === 0 ? 'Select at least one day' : 'Place Order →'}
+      </button>
+      <p style="font-size:11px;color:var(--text-light);text-align:center;margin-top:10px;">We'll confirm your order via phone. No payment needed online.</p>
+    </div>
+  </div>`
+}
+
+function vCustomerExisting() {
+  const o = S.existingOrder
+  if (!o) return vLanding()
+  const days = (o.delivery_days || []).map(d => `<span class="day-chip">${cap(d)}</span>`).join('')
+  const extras = (o.extras || []).filter(e => e.qty > 0).map(e => `<div class="summary-row"><span>${e.name} ×${e.qty}</span><span>${e.price > 0 ? '+$'+(e.price*e.qty).toFixed(2) : 'Free'}</span></div>`).join('')
+  const statusClass = { pending: 'badge-pending', confirmed: 'badge-confirmed', delivered: 'badge-delivered' }
+  return `
+  ${vHeader(false)}
+  <div class="page">
+    <div style="margin-top:24px;">
+      <div class="alert alert-info">You've already ordered this week, ${o.customer_name}! Here's your order.</div>
+      <div class="card">
+        <div class="card-title">Your order</div>
+        <div class="card-sub">Week of ${fmtWeek(o.week_start)}</div>
+        <div style="margin-bottom:12px;">
+          <p style="font-size:12px;color:var(--text-light);margin-bottom:6px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;">Delivery days</p>
+          <div class="order-days">${days}</div>
+        </div>
+        ${o.pregnancy_plan ? `<div style="margin-bottom:12px;"><span class="pregnancy-badge">🌸 Pregnancy plan</span></div>` : ''}
+        ${extras ? `<div class="divider"></div><div class="summary-box">${extras}</div>` : ''}
+        ${o.notes ? `<div class="divider"></div><p style="font-size:13px;color:var(--text-mid);">📝 ${o.notes}</p>` : ''}
+        <div class="divider"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:13px;color:var(--text-mid);">Status</span>
+          <span class="badge ${statusClass[o.status] || 'badge-pending'}">${cap(o.status)}</span>
+        </div>
+      </div>
+      <button class="btn btn-ghost btn-full" data-action="go-landing" style="margin-top:12px;">← Back to home</button>
+    </div>
+  </div>`
+}
+
+function vCustomerSuccess() {
+  const days = [...S.sel.days].map(d => cap(d)).join(', ')
+  return `
+  ${vHeader(false)}
+  <div class="page">
+    <div class="success-wrap">
+      <div class="success-icon">🌸</div>
+      <h2 class="success-title">Order placed!</h2>
+      <p class="success-sub">Thank you, ${S.customer?.name}!<br>Your tiffin is confirmed for <strong>${days}</strong>.<br><br>We'll reach out on your phone to confirm delivery. See you this week! 💕</p>
+      <button class="btn btn-primary" data-action="go-landing" style="margin-top:28px;">← Back to home</button>
+    </div>
+  </div>`
+}
+
+function vAdminLogin() {
+  return `
+  ${vHeader(false)}
+  <div class="page">
+    <div style="margin-top:40px;">
+      <h2 style="font-family:'Cormorant Garamond',serif;font-size:28px;font-weight:500;margin-bottom:4px;">Admin login</h2>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:24px;">Poshan kitchen dashboard</p>
+      ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+      <div class="card">
+        <div class="field">
+          <label>Email</label>
+          <input type="email" id="admin-email" value="${CFG.adminEmail}" />
+        </div>
+        <div class="field">
+          <label>Password</label>
+          <input type="password" id="admin-password" placeholder="Your Supabase password" />
+        </div>
+        <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="admin-login" ${S.loading ? 'disabled' : ''}>
+          ${S.loading ? 'Signing in…' : 'Sign in'}
+        </button>
+      </div>
+      <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:12px;">← Back</button>
+    </div>
+  </div>`
+}
+
+function vAdminDashboard() {
+  return `
+  ${vHeader(false)}
+  <div class="page-wide">
+    <div style="margin-top:20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+      <div>
+        <h2 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:500;">Poshan Kitchen</h2>
+        <p style="font-size:12px;color:var(--text-light);">Week of ${fmtWeek(weekStart())} · ${S.allOrders.length} order${S.allOrders.length !== 1 ? 's' : ''}</p>
+      </div>
+    </div>
+    ${S.msg ? `<div class="alert alert-success">${S.msg}</div>` : ''}
+    ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+    <div class="tabs">
+      <button class="tab-btn ${S.adminTab === 'menu' ? 'active' : ''}" data-action="switch-tab" data-tab="menu">📋 Set Menu</button>
+      <button class="tab-btn ${S.adminTab === 'orders' ? 'active' : ''}" data-action="switch-tab" data-tab="orders">📦 Orders (${S.allOrders.length})</button>
+      <button class="tab-btn ${S.adminTab === 'extras' ? 'active' : ''}" data-action="switch-tab" data-tab="extras">✨ Extras</button>
+    </div>
+    ${S.adminTab === 'menu' ? adminMenuTab() : S.adminTab === 'orders' ? adminOrdersTab() : adminExtrasTab()}
+  </div>`
+}
+
+function adminMenuTab() {
+  const dayForms = DAYS.map(day => {
+    const d = S.menuDraft[day] || {}
+    return `<div class="menu-day-editor">
+      <div class="menu-day-label">${DAY_LABELS[day]}</div>
+      <div class="input-row" style="margin-bottom:8px;">
+        <div class="mini-field">
+          <label>Main dish</label>
+          <input type="text" data-field="menu-main" data-day="${day}" value="${d.main || ''}" placeholder="e.g. Palak Paneer" />
+        </div>
+        <div class="mini-field">
+          <label>Side</label>
+          <input type="text" data-field="menu-side" data-day="${day}" value="${d.side || ''}" placeholder="e.g. Jeera Rice + 2 Rotis" />
+        </div>
+      </div>
+      <div class="input-row">
+        <div class="mini-field">
+          <label>Protein note</label>
+          <input type="text" data-field="menu-protein" data-day="${day}" value="${d.protein || ''}" placeholder="e.g. High iron" />
+        </div>
+        <div class="mini-field">
+          <label>Notes</label>
+          <input type="text" data-field="menu-notes" data-day="${day}" value="${d.notes || ''}" placeholder="e.g. Pregnancy-friendly" />
+        </div>
+      </div>
+    </div>`
+  }).join('')
+
+  return `<div>
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">Set this week's menu. Leave a day blank to mark it as no delivery.</p>
+    ${dayForms}
+    <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="save-menu" ${S.loading ? 'disabled' : ''} style="margin-top:8px;">
+      ${S.loading ? 'Saving…' : '✓ Save this week\'s menu'}
+    </button>
+  </div>`
+}
+
+function adminOrdersTab() {
+  if (!S.allOrders.length) return `<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">No orders yet this week.</div></div>`
+  return `<div style="overflow-x:auto;">
+    <table class="orders-table">
+      <thead><tr>
+        <th>Customer</th><th>Phone</th><th>Days</th><th>Extras</th><th>Plan</th><th>Notes</th><th>Status</th>
+      </tr></thead>
+      <tbody>
+        ${S.allOrders.map(o => `<tr>
+          <td><strong>${o.customer_name}</strong></td>
+          <td>${o.customer_phone}</td>
+          <td><div class="order-days">${(o.delivery_days||[]).map(d=>`<span class="day-chip">${cap(d)}</span>`).join('')}</div></td>
+          <td>${(o.extras||[]).filter(e=>e.qty>0).map(e=>`${e.name}×${e.qty}`).join(', ') || '—'}</td>
+          <td>${o.pregnancy_plan ? '<span class="pregnancy-badge">🌸 Pregnancy</span>' : '—'}</td>
+          <td style="max-width:150px;">${o.notes || '—'}</td>
+          <td>
+            <select class="status-select" data-action="update-status" data-id="${o.id}">
+              <option value="pending" ${o.status==='pending'?'selected':''}>Pending</option>
+              <option value="confirmed" ${o.status==='confirmed'?'selected':''}>Confirmed</option>
+              <option value="delivered" ${o.status==='delivered'?'selected':''}>Delivered</option>
+            </select>
+          </td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  </div>`
+}
+
+function adminExtrasTab() {
+  return `<div>
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">Manage extras in your Supabase dashboard under the <strong>extras</strong> table. Changes reflect here automatically.</p>
+    ${S.extras.length ? `<div class="extras-grid">
+      ${S.extras.map(ex => `<div class="extra-row">
+        <div class="extra-info"><div class="extra-name">${ex.name}</div>${ex.description ? `<div class="extra-desc">${ex.description}</div>` : ''}</div>
+        <div class="extra-price">${ex.price > 0 ? `$${ex.price.toFixed(2)}` : 'Free'}</div>
+        <span class="badge ${ex.available ? 'badge-confirmed' : 'badge-pending'}">${ex.available ? 'Live' : 'Hidden'}</span>
+      </div>`).join('')}
+    </div>` : `<div class="empty"><div class="empty-icon">✨</div><div class="empty-text">No extras yet. Add them in Supabase.</div></div>`}
+  </div>`
+}
+
+// ════════════════════════════════════════════════════════════════════
+// RENDER
+// ════════════════════════════════════════════════════════════════════
+function render() {
+  const root = document.getElementById('root')
+  const views = {
+    landing:           vLanding,
+    'customer-form':   vCustomerForm,
+    'customer-menu':   vCustomerMenu,
+    'customer-existing': vCustomerExisting,
+    'customer-success':  vCustomerSuccess,
+    'admin-login':     vAdminLogin,
+    'admin-dashboard': vAdminDashboard
+  }
+  root.innerHTML = (views[S.view] || vLanding)()
+}
+
+// ════════════════════════════════════════════════════════════════════
+// EVENTS
+// ════════════════════════════════════════════════════════════════════
+document.addEventListener('click', async (e) => {
+  const el = e.target.closest('[data-action]')
+  if (!el) return
+  const action = el.dataset.action
+  S.error = null; S.msg = null
+
+  if (action === 'go-landing') { S.view = 'landing'; render() }
+  else if (action === 'go-customer') { S.view = 'customer-form'; render() }
+  else if (action === 'go-admin') { S.view = 'admin-login'; render() }
+
+  else if (action === 'toggle-day') {
+    const day = el.dataset.day
+    if (S.sel.days.has(day)) S.sel.days.delete(day)
+    else S.sel.days.add(day)
+    render()
+  }
+
+  else if (action === 'toggle-pregnancy') {
+    const notes = document.getElementById('notes-field')
+    if (notes) S.sel.notes = notes.value
+    S.sel.pregnancy = !S.sel.pregnancy
+    render()
+  }
+
+  else if (action === 'extra-add') {
+    const id = el.dataset.id
+    S.sel.extras[id] = (S.sel.extras[id] || 0) + 1
+    render()
+  }
+  else if (action === 'extra-remove') {
+    const id = el.dataset.id
+    if ((S.sel.extras[id] || 0) > 0) S.sel.extras[id]--
+    render()
+  }
+
+  else if (action === 'customer-lookup') {
+    const name = document.getElementById('inp-name')?.value?.trim()
+    const phone = document.getElementById('inp-phone')?.value?.trim()
+    if (!name || !phone) { S.error = 'Please enter your name and phone number.'; render(); return }
+    S.loading = true; S.customer = { name, phone }; render()
+    await checkExistingOrder(phone)
+    S.loading = false
+    S.view = S.existingOrder ? 'customer-existing' : 'customer-menu'
+    render()
+  }
+
+  else if (action === 'submit-order') {
+    const notes = document.getElementById('notes-field')
+    if (notes) S.sel.notes = notes.value
+    if (S.sel.days.size === 0) { S.error = 'Please select at least one delivery day.'; render(); return }
+    S.loading = true; render()
+    const ok = await submitOrder()
+    S.loading = false
+    if (ok) { S.view = 'customer-success'; render() }
+    else { S.error = 'Something went wrong. Please try again.'; render() }
+  }
+
+  else if (action === 'admin-login') {
+    const email = document.getElementById('admin-email')?.value?.trim()
+    const pass = document.getElementById('admin-password')?.value
+    if (!email || !pass) { S.error = 'Please enter email and password.'; render(); return }
+    S.loading = true; render()
+    const { data, error } = await db.auth.signInWithPassword({ email, password: pass })
+    S.loading = false
+    if (error) { S.error = 'Login failed. Check your email and password.'; render(); return }
+    if (email !== CFG.adminEmail) { await db.auth.signOut(); S.error = 'Not authorised.'; render(); return }
+    S.adminUser = data.user
+    await loadAllOrders()
+    S.view = 'admin-dashboard'; render()
+  }
+
+  else if (action === 'admin-logout') {
+    await db.auth.signOut(); S.adminUser = null; S.view = 'landing'; render()
+  }
+
+  else if (action === 'switch-tab') {
+    S.adminTab = el.dataset.tab
+    if (S.adminTab === 'orders') await loadAllOrders()
+    render()
+  }
+
+  else if (action === 'save-menu') {
+    // Collect menu draft from inputs
+    document.querySelectorAll('[data-field^="menu-"]').forEach(inp => {
+      const field = inp.dataset.field.replace('menu-', '')
+      const day = inp.dataset.day
+      if (!S.menuDraft[day]) S.menuDraft[day] = {}
+      S.menuDraft[day][field] = inp.value.trim()
+    })
+    S.loading = true; render()
+    const ok = await saveMenu()
+    await loadMenu()
+    S.loading = false
+    if (ok) { S.msg = '✓ Menu saved successfully!' } else { S.error = 'Save failed. Please try again.' }
+    render()
+  }
+})
+
+document.addEventListener('change', async (e) => {
+  const el = e.target.closest('[data-action]')
+  if (!el) return
+  if (el.dataset.action === 'update-status') {
+    await updateStatus(el.dataset.id, el.value)
+  }
+})
+
+// ════════════════════════════════════════════════════════════════════
+// BOOT
+// ════════════════════════════════════════════════════════════════════
+async function boot() {
+  render() // show loading state first
+  await Promise.all([loadMenu(), loadExtras()])
+  // check if admin is already logged in
+  const { data: { session } } = await db.auth.getSession()
+  if (session?.user?.email === CFG.adminEmail) {
+    S.adminUser = session.user
+    await loadAllOrders()
+    S.view = 'admin-dashboard'
+  }
+  render()
+}
+
+boot()
+</script>
+</body>
+</html>
