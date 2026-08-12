@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Poshan — Weekly Meals</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -352,51 +352,25 @@ body {
   </div>
 </div>
 <script>
-// ════════════════════════════════════════════════════════════════════
-// CONFIG — replace these 3 values after Supabase setup
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
+// CONFIG - replace these 3 values after Supabase setup
+// ================================================================
 const CFG = {
   url:        'https://urvdztlqvfpzifdcndur.supabase.co',
   key:        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVydmR6dGxxdmZwemlmZGNuZHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzgyMTgsImV4cCI6MjEwMjExNDIxOH0.ABqrNa197i5rY0wZZ6bhoAjTXH8cPlkphwmBGkFlr6U',
   adminEmail: 'praneetsingh8@gmail.com'
 }
 
-// ════════════════════════════════════════════════════════════════════
-// CONFIG CHECK
-// ════════════════════════════════════════════════════════════════════
-const isConfigured = CFG.url !== 'YOUR_SUPABASE_URL' && CFG.key !== 'YOUR_SUPABASE_ANON_KEY'
-
-if (!isConfigured) {
-  document.getElementById('root').innerHTML = `
-    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fdf6fa;font-family:'Jost',sans-serif;padding:24px;">
-      <div style="max-width:420px;text-align:center;">
-        <div style="font-size:48px;margin-bottom:16px;">🌸</div>
-        <div style="font-family:'Cormorant Garamond',serif;font-size:32px;font-weight:500;color:#2a1f2e;margin-bottom:8px;">Poshan</div>
-        <div style="font-size:13px;color:#7a6080;margin-bottom:24px;">Nourishment for two</div>
-        <div style="background:#fff;border:1px solid #ead8ea;border-radius:12px;padding:24px;text-align:left;">
-          <div style="font-size:14px;font-weight:600;color:#2a1f2e;margin-bottom:12px;">⚙️ Setup required</div>
-          <div style="font-size:13px;color:#7a6080;line-height:1.7;">
-            The database isn't connected yet. Open <strong>index.html</strong> and replace the three config values at the top with your Supabase credentials.<br><br>
-            See <strong>SETUP.md</strong> for step-by-step instructions.
-          </div>
-        </div>
-        <div style="margin-top:16px;font-size:12px;color:#b0a0b8;">Coming soon to east GTA families 💕</div>
-      </div>
-    </div>`
-  return // Stop here — show setup message only
-}
-
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // INIT
-// ════════════════════════════════════════════════════════════════════
-const { createClient } = supabase
-const db = createClient(CFG.url, CFG.key)
+// ================================================================
+var db = null
 const DAYS = ['monday','tuesday','wednesday','thursday','friday','saturday']
 const DAY_LABELS = { monday:'Monday', tuesday:'Tuesday', wednesday:'Wednesday', thursday:'Thursday', friday:'Friday', saturday:'Saturday' }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // STATE
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 let S = {
   view: 'landing',
   customer: null,
@@ -413,9 +387,9 @@ let S = {
   msg: null
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // HELPERS
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 function weekStart() {
   const d = new Date()
   const day = d.getDay()
@@ -428,7 +402,7 @@ function fmtWeek(ds) {
   const d = new Date(ds + 'T12:00:00')
   const e = new Date(d); e.setDate(e.getDate() + 5)
   const opt = { month: 'short', day: 'numeric' }
-  return `${d.toLocaleDateString('en-CA', opt)} – ${e.toLocaleDateString('en-CA', opt)}`
+  return `${d.toLocaleDateString('en-CA', opt)} - ${e.toLocaleDateString('en-CA', opt)}`
 }
 
 function cap(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : '' }
@@ -440,9 +414,9 @@ function extraTotal() {
   }, 0)
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // DATA
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 async function loadMenu() {
   const { data } = await db.from('weekly_menu').select('*').eq('week_start', weekStart()).maybeSingle()
   S.weeklyMenu = data
@@ -493,9 +467,9 @@ async function updateStatus(id, status) {
   render()
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // SVG LOGO MARK
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 function logoMark(size = 40) {
   return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" fill="none">
     <path d="M32 8 C18 8 10 20 10 32 C10 46 20 58 32 58 C44 58 54 46 54 32 C54 20 46 8 32 8Z" fill="#f3e0f0"/>
@@ -506,9 +480,9 @@ function logoMark(size = 40) {
   </svg>`
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // VIEWS
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 
 function vHeader(showAdmin = true) {
   return `<header class="site-header">
@@ -848,9 +822,9 @@ function adminExtrasTab() {
   </div>`
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // RENDER
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 function render() {
   const root = document.getElementById('root')
   const views = {
@@ -865,9 +839,9 @@ function render() {
   root.innerHTML = (views[S.view] || vLanding)()
 }
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // EVENTS
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 document.addEventListener('click', async (e) => {
   const el = e.target.closest('[data-action]')
   if (!el) return
@@ -974,9 +948,9 @@ document.addEventListener('change', async (e) => {
   }
 })
 
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 // BOOT
-// ════════════════════════════════════════════════════════════════════
+// ================================================================
 async function boot() {
   try {
     render()
@@ -1008,12 +982,17 @@ async function boot() {
   }
 }
 
-// Wait for Supabase to load (deferred), then boot
-window.addEventListener('load', () => {
-  if (typeof supabase !== 'undefined') {
+// Boot when page is ready
+window.addEventListener('load', function() {
+  if (CFG.url === 'YOUR_SUPABASE_URL') {
+    document.getElementById('root').innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fdf6fa;font-family:sans-serif;padding:24px;text-align:center;"><div><div style="font-size:40px">🌸</div><div style="font-size:26px;color:#8a3a6e;margin:12px 0;font-weight:500">Poshan</div><div style="background:#fff;border:1px solid #ead8ea;border-radius:12px;padding:20px;margin-top:16px;text-align:left;max-width:360px"><div style="font-weight:600;margin-bottom:8px">Setup required</div><div style="font-size:13px;color:#7a6080;line-height:1.7">Add your Supabase URL, key, and admin email to the config at the top of index.html</div></div></div></div>'
+    return
+  }
+  try {
+    db = supabase.createClient(CFG.url, CFG.key)
     boot()
-  } else {
-    setTimeout(boot, 1000)
+  } catch(e) {
+    document.getElementById('root').innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fdf6fa;font-family:sans-serif;padding:24px;text-align:center;"><div style="font-size:14px;color:#c03030">Connection error: ' + e.message + '</div></div>'
   }
 })
 </script>
