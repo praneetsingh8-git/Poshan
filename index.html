@@ -356,9 +356,11 @@ body {
 // CONFIG - replace these 3 values after Supabase setup
 // ================================================================
 const CFG = {
-  url:        'https://urvdztlqvfpzifdcndur.supabase.co',
-  key:        'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVydmR6dGxxdmZwemlmZGNuZHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzgyMTgsImV4cCI6MjEwMjExNDIxOH0.ABqrNa197i5rY0wZZ6bhoAjTXH8cPlkphwmBGkFlr6U',
-  adminEmail: 'praneetsingh8@gmail.com'
+  url:          'https://urvdztlqvfpzifdcndur.supabase.co',
+  key:          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVydmR6dGxxdmZwemlmZGNuZHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzgyMTgsImV4cCI6MjEwMjExNDIxOH0.ABqrNa197i5rY0wZZ6bhoAjTXH8cPlkphwmBGkFlr6U',
+  adminEmail:   'praneetsingh8@gmail.com',
+  etransfer:    'praneetsingh8@gmail.com',   // Interac e-Transfer email
+  stripeLink:   ''                            // paste Stripe payment link here (optional)
 }
 
 // ================================================================
@@ -374,10 +376,12 @@ const DAY_LABELS = { monday:'Monday', tuesday:'Tuesday', wednesday:'Wednesday', 
 let S = {
   view: 'landing',
   customer: null,
+  formData: { name: '', phone: '' },
+  welcomeBack: false,
   adminUser: null,
   weeklyMenu: null,
   extras: [],
-  sel: { days: new Set(), extras: {}, notes: '', pregnancy: false },
+  sel: { days: new Set(), extras: {}, choices: {}, notes: '', pregnancy: false },
   existingOrder: null,
   allOrders: [],
   adminTab: 'menu',
@@ -438,11 +442,16 @@ async function submitOrder() {
     const ex = S.extras.find(e => e.id === id)
     return { id, name: ex?.name || '', qty, price: ex?.price || 0 }
   })
+  // Encode day+choice as "day:dish" strings for storage without schema change
+  const daysEncoded = [...S.sel.days].map(d => {
+    const choice = S.sel.choices[d]
+    return choice ? d + ':' + choice : d
+  })
   const { error } = await db.from('orders').insert({
     customer_name: S.customer.name,
     customer_phone: S.customer.phone,
     week_start: weekStart(),
-    delivery_days: [...S.sel.days],
+    delivery_days: daysEncoded,
     extras: extrasArr,
     pregnancy_plan: S.sel.pregnancy,
     notes: S.sel.notes,
@@ -514,22 +523,25 @@ function vLanding() {
 }
 
 function vCustomerForm() {
+  const wbMsg = S.welcomeBack ? `<div class="alert alert-success" style="margin-bottom:12px;">👋 Welcome back, ${S.formData.name}! Continuing to your order.</div>` : ''
   return `
   ${vHeader()}
   <div class="page">
     <div style="margin-top:24px;">
       <h2 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:500;margin-bottom:4px;">Your details</h2>
       <p style="font-size:13px;color:var(--text-light);margin-bottom:24px;">No account needed. Just your name and phone.</p>
+      ${wbMsg}
       ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
       <div class="card">
         <div class="field">
           <label>Your name</label>
-          <input type="text" id="inp-name" placeholder="e.g. Priya" autocomplete="name" />
+          <input type="text" id="inp-name" placeholder="e.g. Priya" autocomplete="name" value="${S.formData.name}" minlength="3" />
+          <p class="field-hint">At least 3 characters</p>
         </div>
         <div class="field">
           <label>Phone number</label>
-          <input type="tel" id="inp-phone" placeholder="+1 (416) 000-0000" autocomplete="tel" />
-          <p class="field-hint">We'll use this to find your order next time.</p>
+          <input type="tel" id="inp-phone" placeholder="+1 (416) 000-0000" autocomplete="tel" value="${S.formData.phone}" />
+          <p class="field-hint" id="phone-hint">At least 10 digits &mdash; we'll find your order next time</p>
         </div>
         <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="customer-lookup" ${S.loading ? 'disabled' : ''}>
           ${S.loading ? 'Looking up…' : 'Continue →'}
@@ -558,26 +570,43 @@ function vCustomerMenu() {
 
   const dayCards = DAYS.map(day => {
     const d = menu[day]
-    if (!d?.main) return `<div class="day-card no-menu">
+    // Support both old format {main} and new format {options:[]}
+    const opts = d?.options || (d?.main ? [d.main] : [])
+    if (!opts.length) return `<div class="day-card no-menu">
       <div class="day-card-header">
         <div class="day-checkbox"></div>
         <div class="day-name">${DAY_LABELS[day]}</div>
         <div class="day-main" style="color:var(--text-light);font-size:13px;">No delivery</div>
       </div>
     </div>`
+
     const sel = S.sel.days.has(day)
-    return `<div class="day-card ${sel ? 'selected' : ''}" data-action="toggle-day" data-day="${day}">
-      <div class="day-card-header">
+    const chosen = S.sel.choices[day] || opts[0]
+    const optionPicker = opts.length > 1 ? `
+      <div style="padding:0 16px 14px;display:flex;flex-direction:column;gap:6px;">
+        ${opts.map(opt => `
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text);">
+            <input type="radio" name="opt-${day}" value="${opt}"
+              ${chosen === opt ? 'checked' : ''}
+              data-action="choose-option" data-day="${day}"
+              style="accent-color:var(--pink-dark);width:16px;height:16px;" />
+            ${opt}
+          </label>`).join('')}
+      </div>` : ''
+
+    return `<div class="day-card ${sel ? 'selected' : ''}" >
+      <div class="day-card-header" data-action="toggle-day" data-day="${day}" style="cursor:pointer;">
         <div class="day-checkbox">
           <svg class="day-check-icon" width="12" height="12" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
         </div>
         <div class="day-name">${DAY_LABELS[day]}</div>
         <div class="day-dishes">
-          <div class="day-main">${d.main}</div>
-          ${d.side ? `<div class="day-side">${d.side}</div>` : ''}
+          <div class="day-main">${opts.length === 1 ? opts[0] : (sel ? chosen : opts[0])}</div>
+          ${d?.side ? `<div class="day-side">${d.side}</div>` : ''}
         </div>
-        ${d.protein ? `<span class="day-tag">${d.protein}</span>` : ''}
+        ${opts.length > 1 ? `<span class="day-tag">${opts.length} options</span>` : (d?.protein ? `<span class="day-tag">${d.protein}</span>` : '')}
       </div>
+      ${sel && opts.length > 1 ? optionPicker : ''}
     </div>`
   }).join('')
 
@@ -600,19 +629,42 @@ function vCustomerMenu() {
 
   const selectedDays = [...S.sel.days]
   const extrasTotal = extraTotal()
-  const summaryHtml = selectedDays.length === 0 ? `<div class="summary-empty">Select delivery days above</div>` :
-    `${selectedDays.map(d => `<div class="summary-row"><span>${DAY_LABELS[d]}</span><span>${menu[d]?.main || '—'}</span></div>`).join('')}
+
+  // Payment summary
+  const planPrice = 349  // default, can be made configurable
+  const paymentBlock = selectedDays.length > 0 ? `
+    <div class="section-head" style="margin-top:20px;"><h3>Payment</h3></div>
+    <div class="card" style="border-color:var(--blue);background:var(--blue-light);">
+      <div style="font-size:13px;color:#2a5a8a;line-height:1.8;">
+        <div style="font-weight:600;margin-bottom:8px;">How to pay</div>
+        <div>Send Interac e-Transfer to:</div>
+        <div style="font-weight:600;font-size:15px;margin:4px 0;">${CFG.etransfer}</div>
+        <div style="color:#4a80b0;font-size:12px;">Message: Poshan - ${S.customer?.name || ''} - Week of ${(S.weeklyMenu?.week_start || '').slice(5)}</div>
+        ${CFG.stripeLink ? `<div style="margin-top:10px;"><a href="${CFG.stripeLink}" target="_blank" style="color:#2a5a8a;font-weight:600;">Or pay online via card →</a></div>` : ''}
+      </div>
+    </div>` : ''
+
+  const summaryHtml = selectedDays.length === 0
+    ? `<div class="summary-empty">Select delivery days above</div>`
+    : `${selectedDays.map(d => {
+        const opts = menu[d]?.options || (menu[d]?.main ? [menu[d].main] : [])
+        const chosen = S.sel.choices[d] || opts[0] || ''
+        return `<div class="summary-row"><span>${DAY_LABELS[d]}</span><span>${chosen}</span></div>`
+      }).join('')}
      ${Object.entries(S.sel.extras).filter(([,q])=>q>0).map(([id,qty])=>{
        const ex = S.extras.find(e=>e.id===id)
        return `<div class="summary-row"><span>${ex?.name} ×${qty}</span><span>${ex?.price > 0 ? '+$'+(ex.price*qty).toFixed(2) : 'Free'}</span></div>`
      }).join('')}
-     <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''} selected</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '✓'}</span></div>`
+     <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''}</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '✓'}</span></div>`
 
   return `
   ${vHeader(false)}
   <div class="page">
     <div style="margin-top:20px;">
-      <p style="font-size:12px;color:var(--text-light);">Week of ${fmtWeek(S.weeklyMenu?.week_start)}</p>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+        <button class="btn btn-ghost btn-sm" data-action="back-to-form">←</button>
+        <p style="font-size:12px;color:var(--text-light);">Week of ${(S.weeklyMenu?.week_start || '').slice(5)}</p>
+      </div>
       <h2 style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:500;margin-bottom:4px;">This week's menu</h2>
       <p style="font-size:13px;color:var(--text-light);margin-bottom:20px;">Select the days you'd like delivery, ${S.customer?.name || 'friend'}.</p>
 
@@ -641,12 +693,14 @@ function vCustomerMenu() {
       <div class="section-head" style="margin-top:20px;"><h3>Order summary</h3></div>
       <div class="summary-box">${summaryHtml}</div>
 
+      ${paymentBlock}
+
       <button class="btn btn-primary btn-full ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}"
         data-action="submit-order" ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}
         style="margin-top:16px;">
         ${S.loading ? 'Placing order…' : selectedDays.length === 0 ? 'Select at least one day' : 'Place Order →'}
       </button>
-      <p style="font-size:11px;color:var(--text-light);text-align:center;margin-top:10px;">We'll confirm your order via phone. No payment needed online.</p>
+      <p style="font-size:11px;color:var(--text-light);text-align:center;margin-top:10px;">Send your e-Transfer after placing the order. We'll confirm delivery via phone.</p>
     </div>
   </div>`
 }
@@ -747,33 +801,40 @@ function vAdminDashboard() {
 function adminMenuTab() {
   const dayForms = DAYS.map(day => {
     const d = S.menuDraft[day] || {}
+    // Support both old {main} and new {options:[]} format
+    const opts = d.options || (d.main ? [d.main] : [''])
+    const optionFields = opts.map((opt, i) => `
+      <div class="mini-field" style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+        <div style="flex:1;">
+          <label>Option ${i+1}</label>
+          <input type="text" data-field="menu-option" data-day="${day}" data-idx="${i}"
+            value="${opt}" placeholder="e.g. Palak Paneer" />
+        </div>
+        ${i > 0 ? `<button style="background:var(--red-light);color:var(--red);border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:18px;margin-top:16px;" data-action="remove-option" data-day="${day}" data-idx="${i}">×</button>` : ''}
+      </div>`).join('')
+
     return `<div class="menu-day-editor">
       <div class="menu-day-label">${DAY_LABELS[day]}</div>
-      <div class="input-row" style="margin-bottom:8px;">
-        <div class="mini-field">
-          <label>Main dish</label>
-          <input type="text" data-field="menu-main" data-day="${day}" value="${d.main || ''}" placeholder="e.g. Palak Paneer" />
-        </div>
-        <div class="mini-field">
-          <label>Side</label>
-          <input type="text" data-field="menu-side" data-day="${day}" value="${d.side || ''}" placeholder="e.g. Jeera Rice + 2 Rotis" />
-        </div>
+      <div style="margin-bottom:10px;">
+        <label style="font-size:11px;color:var(--text-light);display:block;margin-bottom:4px;">DISH OPTIONS (customer picks one)</label>
+        ${optionFields}
+        <button class="btn btn-ghost btn-sm" data-action="add-option" data-day="${day}" style="margin-top:4px;">+ Add option</button>
       </div>
       <div class="input-row">
         <div class="mini-field">
-          <label>Protein note</label>
-          <input type="text" data-field="menu-protein" data-day="${day}" value="${d.protein || ''}" placeholder="e.g. High iron" />
+          <label>Side / accompaniment</label>
+          <input type="text" data-field="menu-side" data-day="${day}" value="${d.side || ''}" placeholder="e.g. Jeera Rice + 2 Rotis" />
         </div>
         <div class="mini-field">
-          <label>Notes</label>
-          <input type="text" data-field="menu-notes" data-day="${day}" value="${d.notes || ''}" placeholder="e.g. Pregnancy-friendly" />
+          <label>Protein / nutrition note</label>
+          <input type="text" data-field="menu-protein" data-day="${day}" value="${d.protein || ''}" placeholder="e.g. High iron" />
         </div>
       </div>
     </div>`
   }).join('')
 
   return `<div>
-    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">Set this week's menu. Leave a day blank to mark it as no delivery.</p>
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">Set this week's menu. Add multiple options per day so customers can choose. Leave a day blank for no delivery.</p>
     ${dayForms}
     <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="save-menu" ${S.loading ? 'disabled' : ''} style="margin-top:8px;">
       ${S.loading ? 'Saving…' : '✓ Save this week\'s menu'}
@@ -792,7 +853,7 @@ function adminOrdersTab() {
         ${S.allOrders.map(o => `<tr>
           <td><strong>${o.customer_name}</strong></td>
           <td>${o.customer_phone}</td>
-          <td><div class="order-days">${(o.delivery_days||[]).map(d=>`<span class="day-chip">${cap(d)}</span>`).join('')}</div></td>
+          <td><div class="order-days">${(o.delivery_days||[]).map(d=>{ const [day,dish]=d.split(':'); return `<span class="day-chip" title="${dish||''}">` + cap(day) + (dish?` <span style='font-size:9px;opacity:0.8'>- ${dish}</span>`:'') + '</span>' }).join('')}</div></td>
           <td>${(o.extras||[]).filter(e=>e.qty>0).map(e=>`${e.name}×${e.qty}`).join(', ') || '—'}</td>
           <td>${o.pregnancy_plan ? '<span class="pregnancy-badge">🌸 Pregnancy</span>' : '—'}</td>
           <td style="max-width:150px;">${o.notes || '—'}</td>
@@ -849,6 +910,11 @@ document.addEventListener('click', async (e) => {
   S.error = null; S.msg = null
 
   if (action === 'go-landing') { S.view = 'landing'; render() }
+  else if (action === 'back-to-form') {
+    S.welcomeBack = false
+    S.view = 'customer-form'
+    render()
+  }
   else if (action === 'go-customer') { S.view = 'customer-form'; render() }
   else if (action === 'go-admin') { S.view = 'admin-login'; render() }
 
@@ -866,6 +932,27 @@ document.addEventListener('click', async (e) => {
     render()
   }
 
+  else if (action === 'choose-option') {
+    const day = el.dataset.day
+    const val = el.value
+    S.sel.choices[day] = val
+    render()
+  }
+  else if (action === 'add-option') {
+    const day = el.dataset.day
+    if (!S.menuDraft[day]) S.menuDraft[day] = { options: [''], side: '', protein: '' }
+    if (!S.menuDraft[day].options) S.menuDraft[day].options = [S.menuDraft[day].main || '']
+    S.menuDraft[day].options.push('')
+    render()
+  }
+  else if (action === 'remove-option') {
+    const day = el.dataset.day
+    const idx = parseInt(el.dataset.idx)
+    if (S.menuDraft[day]?.options) {
+      S.menuDraft[day].options.splice(idx, 1)
+    }
+    render()
+  }
   else if (action === 'extra-add') {
     const id = el.dataset.id
     S.sel.extras[id] = (S.sel.extras[id] || 0) + 1
@@ -880,11 +967,22 @@ document.addEventListener('click', async (e) => {
   else if (action === 'customer-lookup') {
     const name = document.getElementById('inp-name')?.value?.trim()
     const phone = document.getElementById('inp-phone')?.value?.trim()
-    if (!name || !phone) { S.error = 'Please enter your name and phone number.'; render(); return }
+    const digits = (phone || '').replace(/\D/g, '')
+    if (!name || name.length < 3) { S.error = 'Name must be at least 3 characters.'; render(); return }
+    if (!phone || digits.length < 10) { S.error = 'Please enter a valid phone number (at least 10 digits).'; render(); return }
+    S.formData = { name, phone }
     S.loading = true; S.customer = { name, phone }; render()
     await checkExistingOrder(phone)
     S.loading = false
-    S.view = S.existingOrder ? 'customer-existing' : 'customer-menu'
+    if (S.existingOrder) { S.view = 'customer-existing'; render(); return }
+    // Check if returning customer (has past orders but not this week)
+    const { data: pastOrders } = await db.from('orders').select('customer_name').eq('customer_phone', phone).limit(1)
+    if (pastOrders && pastOrders.length > 0) {
+      S.welcomeBack = true
+      S.formData.name = pastOrders[0].customer_name
+      S.customer.name = pastOrders[0].customer_name
+    }
+    S.view = 'customer-menu'
     render()
   }
 
@@ -924,12 +1022,26 @@ document.addEventListener('click', async (e) => {
   }
 
   else if (action === 'save-menu') {
-    // Collect menu draft from inputs
-    document.querySelectorAll('[data-field^="menu-"]').forEach(inp => {
+    // Collect side/protein fields
+    document.querySelectorAll('[data-field="menu-side"],[data-field="menu-protein"]').forEach(inp => {
       const field = inp.dataset.field.replace('menu-', '')
       const day = inp.dataset.day
       if (!S.menuDraft[day]) S.menuDraft[day] = {}
       S.menuDraft[day][field] = inp.value.trim()
+    })
+    // Collect options (multiple per day)
+    document.querySelectorAll('[data-field="menu-option"]').forEach(inp => {
+      const day = inp.dataset.day
+      const idx = parseInt(inp.dataset.idx)
+      if (!S.menuDraft[day]) S.menuDraft[day] = {}
+      if (!S.menuDraft[day].options) S.menuDraft[day].options = []
+      S.menuDraft[day].options[idx] = inp.value.trim()
+    })
+    // Clean empty options
+    DAYS.forEach(day => {
+      if (S.menuDraft[day]?.options) {
+        S.menuDraft[day].options = S.menuDraft[day].options.filter(o => o)
+      }
     })
     S.loading = true; render()
     const ok = await saveMenu()
@@ -945,6 +1057,26 @@ document.addEventListener('change', async (e) => {
   if (!el) return
   if (el.dataset.action === 'update-status') {
     await updateStatus(el.dataset.id, el.value)
+  } else if (el.dataset.action === 'choose-option') {
+    S.sel.choices[el.dataset.day] = el.value
+    render()
+  }
+})
+
+// Live phone lookup on input
+document.addEventListener('input', async (e) => {
+  if (e.target.id !== 'inp-phone') return
+  const digits = e.target.value.replace(/\D/g, '')
+  if (digits.length >= 10) {
+    const { data } = await db.from('orders').select('customer_name').eq('customer_phone', e.target.value.trim()).limit(1)
+    const hint = document.getElementById('phone-hint')
+    if (hint && data && data.length > 0) {
+      const nameInp = document.getElementById('inp-name')
+      if (nameInp && !nameInp.value) nameInp.value = data[0].customer_name
+      hint.innerHTML = "<span style=\"color:var(--green);font-weight:500;\">👋 Welcome back, " + data[0].customer_name + "!</span>"
+    } else if (hint) {
+      hint.innerHTML = "At least 10 digits - we'll find your order next time"
+    }
   }
 })
 
