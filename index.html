@@ -909,19 +909,30 @@ document.addEventListener('click', async (e) => {
   const action = el.dataset.action
   S.error = null; S.msg = null
 
-  if (action === 'go-landing') { S.view = 'landing'; render() }
+  if (action === 'go-landing') { history.replaceState(null,'',window.location.pathname); S.view = 'landing'; render() }
   else if (action === 'back-to-form') {
     S.welcomeBack = false
     S.view = 'customer-form'
     render()
   }
   else if (action === 'go-customer') { S.view = 'customer-form'; render() }
-  else if (action === 'go-admin') { S.view = 'admin-login'; render() }
+  else if (action === 'go-admin') { window.location.hash = 'admin'; S.view = 'admin-login'; render() }
 
   else if (action === 'toggle-day') {
     const day = el.dataset.day
-    if (S.sel.days.has(day)) S.sel.days.delete(day)
-    else S.sel.days.add(day)
+    if (S.sel.days.has(day)) {
+      S.sel.days.delete(day)
+      delete S.sel.choices[day]
+    } else {
+      S.sel.days.add(day)
+      // Always record which dish was chosen. When a day has one
+      // option no radio buttons appear, so default to the first.
+      if (!S.sel.choices[day]) {
+        const d = S.weeklyMenu?.menu?.[day]
+        const opts = d?.options || (d?.main ? [d.main] : [])
+        if (opts.length) S.sel.choices[day] = opts[0]
+      }
+    }
     render()
   }
 
@@ -1012,7 +1023,7 @@ document.addEventListener('click', async (e) => {
   }
 
   else if (action === 'admin-logout') {
-    await db.auth.signOut(); S.adminUser = null; S.view = 'landing'; render()
+    await db.auth.signOut(); S.adminUser = null; history.replaceState(null,'',window.location.pathname); S.view = 'landing'; render()
   }
 
   else if (action === 'switch-tab') {
@@ -1092,6 +1103,8 @@ async function boot() {
       S.adminUser = session.user
       await loadAllOrders()
       S.view = 'admin-dashboard'
+    } else if (window.location.hash === '#admin') {
+      S.view = 'admin-login'
     }
     render()
   } catch(err) {
@@ -1122,6 +1135,8 @@ window.addEventListener('load', function() {
   }
   try {
     db = supabase.createClient(CFG.url, CFG.key)
+    // Deep link: myposhan.ca/#admin opens the admin screen
+    if (window.location.hash === '#admin') S.view = 'admin-login'
     boot()
   } catch(e) {
     document.getElementById('root').innerHTML = '<div style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#fdf6fa;font-family:sans-serif;padding:24px;text-align:center;"><div style="font-size:14px;color:#c03030">Connection error: ' + e.message + '</div></div>'
