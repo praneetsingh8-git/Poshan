@@ -376,7 +376,9 @@ const DAY_LABELS = { monday:'Monday', tuesday:'Tuesday', wednesday:'Wednesday', 
 let S = {
   view: 'landing',
   customer: null,
-  formData: { name: '', phone: '' },
+  formData: { name: '', phone: '', email: '' },
+  adminWeek: null,
+  allCustomers: [],
   welcomeBack: false,
   adminUser: null,
   weeklyMenu: null,
@@ -411,6 +413,56 @@ function fmtWeek(ds) {
 
 function cap(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : '' }
 
+// Standing text shown on every menu
+const MEAL_INCLUDES = 'Every meal comes with 4 rotis and a portion of jeera rice or plain rice.'
+
+const CATEGORIES = [
+  { key: 'iron',    label: 'Iron rich',    icon: '\u{1FA78}' },
+  { key: 'protein', label: 'Protein rich', icon: '\u{1F4AA}' }
+]
+
+// Read a day's categories. Falls back to the old single-list format
+// so menus set before this change still display.
+function dayCategories(entry) {
+  if (!entry) return []
+  const out = []
+  CATEGORIES.forEach(c => {
+    const opts = (entry[c.key] || []).filter(Boolean)
+    if (opts.length) out.push({ key: c.key, label: c.label, icon: c.icon, opts })
+  })
+  if (!out.length) {
+    const legacy = (entry.options || (entry.main ? [entry.main] : [])).filter(Boolean)
+    if (legacy.length) out.push({ key: 'main', label: 'Main', icon: '\u{1F35B}', opts: legacy })
+  }
+  return out
+}
+
+function dayHasMenu(entry) { return dayCategories(entry).length > 0 }
+
+// "monday:iron=Palak Paneer|protein=Rajma"
+function encodeDay(day, picks) {
+  const parts = Object.entries(picks || {}).filter(([,v]) => v).map(([k,v]) => k + '=' + v)
+  return parts.length ? day + ':' + parts.join('|') : day
+}
+
+function decodeDay(str) {
+  const idx = String(str).indexOf(':')
+  if (idx === -1) return { day: str, picks: {} }
+  const day = str.slice(0, idx), rest = str.slice(idx + 1)
+  if (!rest.includes('=')) return { day, picks: { main: rest } }
+  const picks = {}
+  rest.split('|').forEach(p => {
+    const i = p.indexOf('=')
+    if (i > 0) picks[p.slice(0, i)] = p.slice(i + 1)
+  })
+  return { day, picks }
+}
+
+// Human-readable list of what was picked for a day
+function picksText(picks) {
+  return Object.values(picks || {}).filter(Boolean).join(' + ')
+}
+
 function extraTotal() {
   return Object.entries(S.sel.extras).reduce((sum, [id, qty]) => {
     const ex = S.extras.find(e => e.id === id)
@@ -442,14 +494,11 @@ async function submitOrder() {
     const ex = S.extras.find(e => e.id === id)
     return { id, name: ex?.name || '', qty, price: ex?.price || 0 }
   })
-  // Encode day+choice as "day:dish" strings for storage without schema change
-  const daysEncoded = [...S.sel.days].map(d => {
-    const choice = S.sel.choices[d]
-    return choice ? d + ':' + choice : d
-  })
+  const daysEncoded = [...S.sel.days].map(d => encodeDay(d, S.sel.choices[d]))
   const { error } = await db.from('orders').insert({
     customer_name: S.customer.name,
     customer_phone: S.customer.phone,
+    customer_email: S.customer.email || null,
     week_start: weekStart(),
     delivery_days: daysEncoded,
     extras: extrasArr,
@@ -461,13 +510,34 @@ async function submitOrder() {
 }
 
 async function saveMenu() {
-  const { error } = await db.from('weekly_menu').upsert({ week_start: weekStart(), menu: S.menuDraft }, { onConflict: 'week_start' })
+  const wk = S.adminWeek || weekStart()
+  const { error } = await db.from('weekly_menu').upsert({ week_start: wk, menu: S.menuDraft }, { onConflict: 'week_start' })
   return !error
 }
 
+// Load the menu for whichever week admin is viewing
+async function loadMenuForAdmin() {
+  const wk = S.adminWeek || weekStart()
+  const { data } = await db.from('weekly_menu').select('*').eq('week_start', wk).maybeSingle()
+  S.menuDraft = data?.menu ? JSON.parse(JSON.stringify(data.menu)) : {}
+}
+
 async function loadAllOrders() {
-  const { data } = await db.from('orders').select('*').eq('week_start', weekStart()).order('created_at', { ascending: false })
+  const wk = S.adminWeek || weekStart()
+  const { data } = await db.from('orders').select('*').eq('week_start', wk).order('created_at', { ascending: false })
   S.allOrders = data || []
+}
+
+async function loadCustomers() {
+  const { data } = await db.from('customers').select('*').order('last_order_at', { ascending: false })
+  S.allCustomers = data || []
+}
+
+// Shift the admin week view by n weeks
+function shiftWeek(n) {
+  const base = new Date((S.adminWeek || weekStart()) + 'T12:00:00')
+  base.setDate(base.getDate() + n * 7)
+  S.adminWeek = base.toISOString().split('T')[0]
 }
 
 async function updateStatus(id, status) {
@@ -543,6 +613,11 @@ function vCustomerForm() {
           <input type="tel" id="inp-phone" placeholder="+1 (416) 000-0000" autocomplete="tel" value="${S.formData.phone}" />
           <p class="field-hint" id="phone-hint">At least 10 digits &mdash; we'll find your order next time</p>
         </div>
+        <div class="field">
+          <label>Email <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-light);">(optional)</span></label>
+          <input type="email" id="inp-email" placeholder="you@example.com" autocomplete="email" value="${S.formData.email || ''}" />
+          <p class="field-hint">For order confirmations and the weekly menu</p>
+        </div>
         <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="customer-lookup" ${S.loading ? 'disabled' : ''}>
           ${S.loading ? 'Looking up…' : 'Continue →'}
         </button>
@@ -554,25 +629,25 @@ function vCustomerForm() {
 
 function vCustomerMenu() {
   const menu = S.weeklyMenu?.menu || {}
-  const hasMenu = Object.keys(menu).length > 0
+  const hasMenu = DAYS.some(d => dayHasMenu(menu[d]))
 
   if (!hasMenu) {
     return `
     ${vHeader()}
     <div class="page">
       <div class="empty" style="margin-top:60px;">
-        <div class="empty-icon">🍱</div>
+        <div class="empty-icon">\u{1F371}</div>
         <div class="empty-text">This week's menu hasn't been set yet.<br>Please check back soon!</div>
-        <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:20px;">← Home</button>
+        <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:20px;">\u2190 Home</button>
       </div>
     </div>`
   }
 
   const dayCards = DAYS.map(day => {
-    const d = menu[day]
-    // Support both old format {main} and new format {options:[]}
-    const opts = d?.options || (d?.main ? [d.main] : [])
-    if (!opts.length) return `<div class="day-card no-menu">
+    const entry = menu[day]
+    const cats  = dayCategories(entry)
+
+    if (!cats.length) return `<div class="day-card no-menu">
       <div class="day-card-header">
         <div class="day-checkbox"></div>
         <div class="day-name">${DAY_LABELS[day]}</div>
@@ -580,33 +655,41 @@ function vCustomerMenu() {
       </div>
     </div>`
 
-    const sel = S.sel.days.has(day)
-    const chosen = S.sel.choices[day] || opts[0]
-    const optionPicker = opts.length > 1 ? `
-      <div style="padding:0 16px 14px;display:flex;flex-direction:column;gap:6px;">
-        ${opts.map(opt => `
-          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;color:var(--text);">
-            <input type="radio" name="opt-${day}" value="${opt}"
-              ${chosen === opt ? 'checked' : ''}
-              data-action="choose-option" data-day="${day}"
-              style="accent-color:var(--pink-dark);width:16px;height:16px;" />
-            ${opt}
-          </label>`).join('')}
-      </div>` : ''
+    const sel   = S.sel.days.has(day)
+    const picks = S.sel.choices[day] || {}
+    const chosenSummary = picksText(picks) || cats.map(c => c.opts[0]).join(' + ')
 
-    return `<div class="day-card ${sel ? 'selected' : ''}" >
+    const pickers = cats.map(c => `
+      <div style="padding:0 16px 4px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;">
+          <span style="font-size:13px;">${c.icon}</span>
+          <span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--pink-dark);">${c.label}</span>
+          <span style="font-size:10px;color:var(--text-light);font-weight:400;letter-spacing:0;text-transform:none;">\u00b7 pick one</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px;margin-bottom:12px;">
+          ${c.opts.map(opt => `
+            <label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-size:13px;color:var(--text);padding:7px 10px;border-radius:8px;background:${picks[c.key] === opt ? 'rgba(255,255,255,0.85)' : 'transparent'};border:1px solid ${picks[c.key] === opt ? 'var(--pink)' : 'transparent'};">
+              <input type="radio" name="${day}-${c.key}" value="${opt}"
+                ${picks[c.key] === opt ? 'checked' : ''}
+                data-action="choose-option" data-day="${day}" data-cat="${c.key}"
+                style="accent-color:var(--pink-dark);width:15px;height:15px;flex-shrink:0;" />
+              ${opt}
+            </label>`).join('')}
+        </div>
+      </div>`).join('')
+
+    return `<div class="day-card ${sel ? 'selected' : ''}">
       <div class="day-card-header" data-action="toggle-day" data-day="${day}" style="cursor:pointer;">
         <div class="day-checkbox">
           <svg class="day-check-icon" width="12" height="12" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
         </div>
         <div class="day-name">${DAY_LABELS[day]}</div>
         <div class="day-dishes">
-          <div class="day-main">${opts.length === 1 ? opts[0] : (sel ? chosen : opts[0])}</div>
-          ${d?.side ? `<div class="day-side">${d.side}</div>` : ''}
+          <div class="day-main" style="font-size:13px;">${chosenSummary}</div>
+          ${!sel ? `<div class="day-side">${cats.length} choice${cats.length !== 1 ? 's' : ''} to make</div>` : ''}
         </div>
-        ${opts.length > 1 ? `<span class="day-tag">${opts.length} options</span>` : (d?.protein ? `<span class="day-tag">${d.protein}</span>` : '')}
       </div>
-      ${sel && opts.length > 1 ? optionPicker : ''}
+      ${sel ? pickers : ''}
     </div>`
   }).join('')
 
@@ -620,7 +703,7 @@ function vCustomerMenu() {
         </div>
         ${ex.price > 0 ? `<div class="extra-price">+$${ex.price.toFixed(2)}</div>` : ''}
         <div class="qty-control">
-          <button class="qty-btn" data-action="extra-remove" data-id="${ex.id}">−</button>
+          <button class="qty-btn" data-action="extra-remove" data-id="${ex.id}">\u2212</button>
           <span class="qty-num">${S.sel.extras[ex.id] || 0}</span>
           <button class="qty-btn" data-action="extra-add" data-id="${ex.id}">+</button>
         </div>
@@ -628,10 +711,8 @@ function vCustomerMenu() {
     </div>` : ''
 
   const selectedDays = [...S.sel.days]
-  const extrasTotal = extraTotal()
+  const extrasTotal  = extraTotal()
 
-  // Payment summary
-  const planPrice = 349  // default, can be made configurable
   const paymentBlock = selectedDays.length > 0 ? `
     <div class="section-head" style="margin-top:20px;"><h3>Payment</h3></div>
     <div class="card" style="border-color:var(--blue);background:var(--blue-light);">
@@ -639,34 +720,37 @@ function vCustomerMenu() {
         <div style="font-weight:600;margin-bottom:8px;">How to pay</div>
         <div>Send Interac e-Transfer to:</div>
         <div style="font-weight:600;font-size:15px;margin:4px 0;">${CFG.etransfer}</div>
-        <div style="color:#4a80b0;font-size:12px;">Message: Poshan - ${S.customer?.name || ''} - Week of ${(S.weeklyMenu?.week_start || '').slice(5)}</div>
-        ${CFG.stripeLink ? `<div style="margin-top:10px;"><a href="${CFG.stripeLink}" target="_blank" style="color:#2a5a8a;font-weight:600;">Or pay online via card →</a></div>` : ''}
+        <div style="color:#4a80b0;font-size:12px;">Message: Poshan - ${S.customer?.name || ''}</div>
+        ${CFG.stripeLink ? `<div style="margin-top:10px;"><a href="${CFG.stripeLink}" target="_blank" style="color:#2a5a8a;font-weight:600;">Or pay online via card \u2192</a></div>` : ''}
       </div>
     </div>` : ''
 
   const summaryHtml = selectedDays.length === 0
     ? `<div class="summary-empty">Select delivery days above</div>`
     : `${selectedDays.map(d => {
-        const opts = menu[d]?.options || (menu[d]?.main ? [menu[d].main] : [])
-        const chosen = S.sel.choices[d] || opts[0] || ''
-        return `<div class="summary-row"><span>${DAY_LABELS[d]}</span><span>${chosen}</span></div>`
+        const picks = S.sel.choices[d] || {}
+        return `<div class="summary-row" style="align-items:flex-start;"><span style="flex-shrink:0;">${DAY_LABELS[d]}</span><span style="text-align:right;">${picksText(picks) || '\u2014'}</span></div>`
       }).join('')}
      ${Object.entries(S.sel.extras).filter(([,q])=>q>0).map(([id,qty])=>{
        const ex = S.extras.find(e=>e.id===id)
-       return `<div class="summary-row"><span>${ex?.name} ×${qty}</span><span>${ex?.price > 0 ? '+$'+(ex.price*qty).toFixed(2) : 'Free'}</span></div>`
+       return `<div class="summary-row"><span>${ex?.name} \u00d7${qty}</span><span>${ex?.price > 0 ? '+$'+(ex.price*qty).toFixed(2) : 'Free'}</span></div>`
      }).join('')}
-     <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''}</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '✓'}</span></div>`
+     <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''}</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '\u2713'}</span></div>`
 
   return `
   ${vHeader(false)}
   <div class="page">
     <div style="margin-top:20px;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-        <button class="btn btn-ghost btn-sm" data-action="back-to-form">←</button>
-        <p style="font-size:12px;color:var(--text-light);">Week of ${(S.weeklyMenu?.week_start || '').slice(5)}</p>
+        <button class="btn btn-ghost btn-sm" data-action="back-to-form">\u2190</button>
+        <p style="font-size:12px;color:var(--text-light);">Week of ${fmtWeek(S.weeklyMenu?.week_start)}</p>
       </div>
       <h2 style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:500;margin-bottom:4px;">This week's menu</h2>
-      <p style="font-size:13px;color:var(--text-light);margin-bottom:20px;">Select the days you'd like delivery, ${S.customer?.name || 'friend'}.</p>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Select your delivery days, ${S.customer?.name || 'friend'}. For each day, pick one iron-rich and one protein-rich dish.</p>
+
+      <div style="background:var(--blue-light);border:1px solid var(--blue);border-radius:10px;padding:12px 14px;font-size:12.5px;color:#2a5a8a;line-height:1.6;margin-bottom:18px;">
+        \u{1F35A} ${MEAL_INCLUDES}
+      </div>
 
       ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
 
@@ -678,7 +762,7 @@ function vCustomerMenu() {
       <div class="card">
         <div class="toggle-row">
           <div>
-            <div class="toggle-label">🌸 Pregnancy meal plan</div>
+            <div class="toggle-label">\u{1F338} Pregnancy meal plan</div>
             <div class="toggle-sub">Marks your order for pregnancy-specific portioning</div>
           </div>
           <button class="toggle ${S.sel.pregnancy ? 'on' : ''}" data-action="toggle-pregnancy"></button>
@@ -686,7 +770,7 @@ function vCustomerMenu() {
         <div class="divider"></div>
         <div class="field" style="margin-bottom:0;">
           <label>Special notes</label>
-          <textarea id="notes-field" placeholder="Dietary restrictions, spice level, allergies…">${S.sel.notes}</textarea>
+          <textarea id="notes-field" placeholder="Dietary restrictions, spice level, allergies\u2026">${S.sel.notes}</textarea>
         </div>
       </div>
 
@@ -698,7 +782,7 @@ function vCustomerMenu() {
       <button class="btn btn-primary btn-full ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}"
         data-action="submit-order" ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}
         style="margin-top:16px;">
-        ${S.loading ? 'Placing order…' : selectedDays.length === 0 ? 'Select at least one day' : 'Place Order →'}
+        ${S.loading ? 'Placing order\u2026' : selectedDays.length === 0 ? 'Select at least one day' : 'Place Order \u2192'}
       </button>
       <p style="font-size:11px;color:var(--text-light);text-align:center;margin-top:10px;">Send your e-Transfer after placing the order. We'll confirm delivery via phone.</p>
     </div>
@@ -708,7 +792,11 @@ function vCustomerMenu() {
 function vCustomerExisting() {
   const o = S.existingOrder
   if (!o) return vLanding()
-  const days = (o.delivery_days || []).map(d => `<span class="day-chip">${cap(d)}</span>`).join('')
+  const days = (o.delivery_days || []).map(raw => {
+    const { day, picks } = decodeDay(raw)
+    const txt = picksText(picks)
+    return `<div style="margin-bottom:6px;"><span class="day-chip">${cap(day)}</span>${txt ? `<span style="font-size:12px;color:var(--text-mid);margin-left:7px;">${txt}</span>` : ''}</div>`
+  }).join('')
   const extras = (o.extras || []).filter(e => e.qty > 0).map(e => `<div class="summary-row"><span>${e.name} ×${e.qty}</span><span>${e.price > 0 ? '+$'+(e.price*e.qty).toFixed(2) : 'Free'}</span></div>`).join('')
   const statusClass = { pending: 'badge-pending', confirmed: 'badge-confirmed', delivered: 'badge-delivered' }
   return `
@@ -738,7 +826,7 @@ function vCustomerExisting() {
 }
 
 function vCustomerSuccess() {
-  const days = [...S.sel.days].map(d => cap(d)).join(', ')
+  const days = [...S.sel.days].map(d => DAY_LABELS[d] || cap(d)).join(', ')
   return `
   ${vHeader(false)}
   <div class="page">
@@ -778,85 +866,123 @@ function vAdminLogin() {
 }
 
 function vAdminDashboard() {
+  const wk = S.adminWeek || weekStart()
+  const isCurrent = wk === weekStart()
+  const tab = S.adminTab
+
   return `
   ${vHeader(false)}
   <div class="page-wide">
-    <div style="margin-top:20px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-      <div>
-        <h2 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:500;">Poshan Kitchen</h2>
-        <p style="font-size:12px;color:var(--text-light);">Week of ${fmtWeek(weekStart())} · ${S.allOrders.length} order${S.allOrders.length !== 1 ? 's' : ''}</p>
+    <div style="margin-top:20px;margin-bottom:16px;">
+      <h2 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:500;">Poshan Kitchen</h2>
+
+      <div style="display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" data-action="week-prev" title="Previous week">\u2190</button>
+        <div style="font-size:13px;color:var(--text);font-weight:500;min-width:150px;text-align:center;">
+          ${fmtWeek(wk)}
+          ${isCurrent ? '<span style="font-size:10px;color:var(--pink-dark);font-weight:600;letter-spacing:0.06em;text-transform:uppercase;display:block;">This week</span>' : ''}
+        </div>
+        <button class="btn btn-ghost btn-sm" data-action="week-next" title="Next week">\u2192</button>
+        ${!isCurrent ? `<button class="btn btn-secondary btn-sm" data-action="week-today">Jump to this week</button>` : ''}
+        <span style="font-size:12px;color:var(--text-light);margin-left:4px;">${S.allOrders.length} order${S.allOrders.length !== 1 ? 's' : ''}</span>
       </div>
     </div>
+
     ${S.msg ? `<div class="alert alert-success">${S.msg}</div>` : ''}
     ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+
     <div class="tabs">
-      <button class="tab-btn ${S.adminTab === 'menu' ? 'active' : ''}" data-action="switch-tab" data-tab="menu">📋 Set Menu</button>
-      <button class="tab-btn ${S.adminTab === 'orders' ? 'active' : ''}" data-action="switch-tab" data-tab="orders">📦 Orders (${S.allOrders.length})</button>
-      <button class="tab-btn ${S.adminTab === 'extras' ? 'active' : ''}" data-action="switch-tab" data-tab="extras">✨ Extras</button>
+      <button class="tab-btn ${tab === 'menu' ? 'active' : ''}" data-action="switch-tab" data-tab="menu">\u{1F4CB} Menu</button>
+      <button class="tab-btn ${tab === 'orders' ? 'active' : ''}" data-action="switch-tab" data-tab="orders">\u{1F4E6} Orders (${S.allOrders.length})</button>
+      <button class="tab-btn ${tab === 'customers' ? 'active' : ''}" data-action="switch-tab" data-tab="customers">\u{1F465} Customers</button>
+      <button class="tab-btn ${tab === 'extras' ? 'active' : ''}" data-action="switch-tab" data-tab="extras">\u2728 Extras</button>
     </div>
-    ${S.adminTab === 'menu' ? adminMenuTab() : S.adminTab === 'orders' ? adminOrdersTab() : adminExtrasTab()}
+
+    ${tab === 'menu' ? adminMenuTab()
+      : tab === 'orders' ? adminOrdersTab()
+      : tab === 'customers' ? adminCustomersTab()
+      : adminExtrasTab()}
   </div>`
 }
 
 function adminMenuTab() {
   const dayForms = DAYS.map(day => {
     const d = S.menuDraft[day] || {}
-    // Support both old {main} and new {options:[]} format
-    const opts = d.options || (d.main ? [d.main] : [''])
-    const optionFields = opts.map((opt, i) => `
-      <div class="mini-field" style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
-        <div style="flex:1;">
-          <label>Option ${i+1}</label>
-          <input type="text" data-field="menu-option" data-day="${day}" data-idx="${i}"
-            value="${opt}" placeholder="e.g. Palak Paneer" />
+    // Migrate legacy single-list menus into the iron slot on first edit
+    const legacy = d.options || (d.main ? [d.main] : [])
+    const iron    = d.iron    || (legacy.length ? legacy : ['', ''])
+    const protein = d.protein || ['', '']
+
+    const catBlock = (key, label, icon, vals) => `
+      <div style="margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:7px;">
+          <span style="font-size:13px;">${icon}</span>
+          <span style="font-size:11px;font-weight:600;letter-spacing:0.08em;text-transform:uppercase;color:var(--pink-dark);">${label}</span>
         </div>
-        ${i > 0 ? `<button style="background:var(--red-light);color:var(--red);border:none;border-radius:8px;padding:6px 10px;cursor:pointer;font-size:18px;margin-top:16px;" data-action="remove-option" data-day="${day}" data-idx="${i}">×</button>` : ''}
-      </div>`).join('')
+        <div class="input-row">
+          <div class="mini-field">
+            <input type="text" data-field="menu-cat" data-day="${day}" data-cat="${key}" data-idx="0"
+              value="${(vals[0] || '').replace(/"/g,'&quot;')}" placeholder="Option 1" />
+          </div>
+          <div class="mini-field">
+            <input type="text" data-field="menu-cat" data-day="${day}" data-cat="${key}" data-idx="1"
+              value="${(vals[1] || '').replace(/"/g,'&quot;')}" placeholder="Option 2" />
+          </div>
+        </div>
+      </div>`
 
     return `<div class="menu-day-editor">
       <div class="menu-day-label">${DAY_LABELS[day]}</div>
-      <div style="margin-bottom:10px;">
-        <label style="font-size:11px;color:var(--text-light);display:block;margin-bottom:4px;">DISH OPTIONS (customer picks one)</label>
-        ${optionFields}
-        <button class="btn btn-ghost btn-sm" data-action="add-option" data-day="${day}" style="margin-top:4px;">+ Add option</button>
-      </div>
-      <div class="input-row">
-        <div class="mini-field">
-          <label>Side / accompaniment</label>
-          <input type="text" data-field="menu-side" data-day="${day}" value="${d.side || ''}" placeholder="e.g. Jeera Rice + 2 Rotis" />
-        </div>
-        <div class="mini-field">
-          <label>Protein / nutrition note</label>
-          <input type="text" data-field="menu-protein" data-day="${day}" value="${d.protein || ''}" placeholder="e.g. High iron" />
-        </div>
-      </div>
+      ${catBlock('iron',    'Iron rich',    '\u{1FA78}', iron)}
+      ${catBlock('protein', 'Protein rich', '\u{1F4AA}', protein)}
     </div>`
   }).join('')
 
   return `<div>
-    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">Set this week's menu. Add multiple options per day so customers can choose. Leave a day blank for no delivery.</p>
+    <div style="background:var(--blue-light);border:1px solid var(--blue);border-radius:10px;padding:12px 14px;font-size:12.5px;color:#2a5a8a;line-height:1.6;margin-bottom:16px;">
+      \u{1F35A} ${MEAL_INCLUDES}<br>
+      <span style="font-size:11.5px;color:#4a80b0;">Shown automatically to every customer \u2014 no need to repeat it in dish names.</span>
+    </div>
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">
+      Give two options per category. Customers pick one iron-rich and one protein-rich dish per day.
+      Leave a day blank for no delivery.
+    </p>
     ${dayForms}
     <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="save-menu" ${S.loading ? 'disabled' : ''} style="margin-top:8px;">
-      ${S.loading ? 'Saving…' : '✓ Save this week\'s menu'}
+      ${S.loading ? 'Saving\u2026' : '\u2713 Save menu for this week'}
     </button>
   </div>`
 }
 
 function adminOrdersTab() {
-  if (!S.allOrders.length) return `<div class="empty"><div class="empty-icon">📭</div><div class="empty-text">No orders yet this week.</div></div>`
+  if (!S.allOrders.length) return `<div class="empty"><div class="empty-icon">\u{1F4ED}</div><div class="empty-text">No orders for this week.</div></div>`
   return `<div style="overflow-x:auto;">
     <table class="orders-table">
       <thead><tr>
-        <th>Customer</th><th>Phone</th><th>Days</th><th>Extras</th><th>Plan</th><th>Notes</th><th>Status</th>
+        <th>Customer</th><th>Contact</th><th>Days &amp; dishes</th><th>Extras</th><th>Plan</th><th>Notes</th><th>Status</th>
       </tr></thead>
       <tbody>
         ${S.allOrders.map(o => `<tr>
           <td><strong>${o.customer_name}</strong></td>
-          <td>${o.customer_phone}</td>
-          <td><div class="order-days">${(o.delivery_days||[]).map(d=>{ const [day,dish]=d.split(':'); return `<span class="day-chip" title="${dish||''}">` + cap(day) + (dish?` <span style='font-size:9px;opacity:0.8'>- ${dish}</span>`:'') + '</span>' }).join('')}</div></td>
-          <td>${(o.extras||[]).filter(e=>e.qty>0).map(e=>`${e.name}×${e.qty}`).join(', ') || '—'}</td>
-          <td>${o.pregnancy_plan ? '<span class="pregnancy-badge">🌸 Pregnancy</span>' : '—'}</td>
-          <td style="max-width:150px;">${o.notes || '—'}</td>
+          <td style="font-size:12px;">
+            ${o.customer_phone}
+            ${o.customer_email ? `<div style="color:var(--text-light);font-size:11px;margin-top:2px;">${o.customer_email}</div>` : ''}
+          </td>
+          <td>
+            <div style="display:flex;flex-direction:column;gap:5px;">
+              ${(o.delivery_days||[]).map(raw => {
+                const { day, picks } = decodeDay(raw)
+                const txt = picksText(picks)
+                return `<div style="font-size:12px;line-height:1.45;">
+                  <span class="day-chip">${cap(day)}</span>
+                  ${txt ? `<span style="color:var(--text-mid);margin-left:6px;">${txt}</span>` : ''}
+                </div>`
+              }).join('')}
+            </div>
+          </td>
+          <td style="font-size:12px;">${(o.extras||[]).filter(e=>e.qty>0).map(e=>`${e.name}\u00d7${e.qty}`).join(', ') || '\u2014'}</td>
+          <td>${o.pregnancy_plan ? '<span class="pregnancy-badge">\u{1F338} Pregnancy</span>' : '\u2014'}</td>
+          <td style="max-width:150px;font-size:12px;">${o.notes || '\u2014'}</td>
           <td>
             <select class="status-select" data-action="update-status" data-id="${o.id}">
               <option value="pending" ${o.status==='pending'?'selected':''}>Pending</option>
@@ -867,6 +993,36 @@ function adminOrdersTab() {
         </tr>`).join('')}
       </tbody>
     </table>
+  </div>`
+}
+
+function adminCustomersTab() {
+  if (!S.allCustomers.length) return `<div class="empty"><div class="empty-icon">\u{1F465}</div><div class="empty-text">No customers yet.<br><span style="font-size:12px;">They're added automatically when orders come in.</span></div></div>`
+
+  const emails = S.allCustomers.filter(c => c.email).map(c => c.email).join(', ')
+
+  return `<div>
+    ${emails ? `
+    <div class="card" style="margin-bottom:16px;">
+      <div class="card-label">Mailing list \u00b7 ${S.allCustomers.filter(c=>c.email).length} with email</div>
+      <textarea readonly style="width:100%;min-height:56px;font-size:12px;color:var(--text-mid);border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--cream);font-family:inherit;">${emails}</textarea>
+      <p style="font-size:11px;color:var(--text-light);margin-top:6px;">Copy this into the BCC field when sending the weekly menu.</p>
+    </div>` : ''}
+    <div style="overflow-x:auto;">
+      <table class="orders-table">
+        <thead><tr><th>Name</th><th>Phone</th><th>Email</th><th>Orders</th><th>First order</th><th>Last order</th></tr></thead>
+        <tbody>
+          ${S.allCustomers.map(c => `<tr>
+            <td><strong>${c.name || '\u2014'}</strong></td>
+            <td style="font-size:12px;">${c.phone}</td>
+            <td style="font-size:12px;color:var(--text-mid);">${c.email || '\u2014'}</td>
+            <td><span class="day-chip">${c.order_count || 0}</span></td>
+            <td style="font-size:12px;color:var(--text-light);">${(c.first_order_at || '').slice(0,10) || '\u2014'}</td>
+            <td style="font-size:12px;color:var(--text-light);">${(c.last_order_at || '').slice(0,10) || '\u2014'}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
   </div>`
 }
 
@@ -925,13 +1081,13 @@ document.addEventListener('click', async (e) => {
       delete S.sel.choices[day]
     } else {
       S.sel.days.add(day)
-      // Always record which dish was chosen. When a day has one
-      // option no radio buttons appear, so default to the first.
-      if (!S.sel.choices[day]) {
-        const d = S.weeklyMenu?.menu?.[day]
-        const opts = d?.options || (d?.main ? [d.main] : [])
-        if (opts.length) S.sel.choices[day] = opts[0]
-      }
+      // Default every category to its first option so the order is
+      // always valid even if the customer doesn't change anything.
+      const cats = dayCategories(S.weeklyMenu?.menu?.[day])
+      if (!S.sel.choices[day]) S.sel.choices[day] = {}
+      cats.forEach(c => {
+        if (!S.sel.choices[day][c.key]) S.sel.choices[day][c.key] = c.opts[0]
+      })
     }
     render()
   }
@@ -943,26 +1099,14 @@ document.addEventListener('click', async (e) => {
     render()
   }
 
-  else if (action === 'choose-option') {
-    const day = el.dataset.day
-    const val = el.value
-    S.sel.choices[day] = val
-    render()
+  else if (action === 'week-prev') {
+    shiftWeek(-1); await loadAllOrders(); await loadMenuForAdmin(); render()
   }
-  else if (action === 'add-option') {
-    const day = el.dataset.day
-    if (!S.menuDraft[day]) S.menuDraft[day] = { options: [''], side: '', protein: '' }
-    if (!S.menuDraft[day].options) S.menuDraft[day].options = [S.menuDraft[day].main || '']
-    S.menuDraft[day].options.push('')
-    render()
+  else if (action === 'week-next') {
+    shiftWeek(1); await loadAllOrders(); await loadMenuForAdmin(); render()
   }
-  else if (action === 'remove-option') {
-    const day = el.dataset.day
-    const idx = parseInt(el.dataset.idx)
-    if (S.menuDraft[day]?.options) {
-      S.menuDraft[day].options.splice(idx, 1)
-    }
-    render()
+  else if (action === 'week-today') {
+    S.adminWeek = weekStart(); await loadAllOrders(); await loadMenuForAdmin(); render()
   }
   else if (action === 'extra-add') {
     const id = el.dataset.id
@@ -978,20 +1122,30 @@ document.addEventListener('click', async (e) => {
   else if (action === 'customer-lookup') {
     const name = document.getElementById('inp-name')?.value?.trim()
     const phone = document.getElementById('inp-phone')?.value?.trim()
+    const email = document.getElementById('inp-email')?.value?.trim()
     const digits = (phone || '').replace(/\D/g, '')
     if (!name || name.length < 3) { S.error = 'Name must be at least 3 characters.'; render(); return }
     if (!phone || digits.length < 10) { S.error = 'Please enter a valid phone number (at least 10 digits).'; render(); return }
-    S.formData = { name, phone }
-    S.loading = true; S.customer = { name, phone }; render()
+    if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { S.error = 'That email address doesn\'t look right.'; render(); return }
+    S.formData = { name, phone, email }
+    S.loading = true; S.customer = { name, phone, email }; render()
     await checkExistingOrder(phone)
     S.loading = false
     if (S.existingOrder) { S.view = 'customer-existing'; render(); return }
-    // Check if returning customer (has past orders but not this week)
-    const { data: pastOrders } = await db.from('orders').select('customer_name').eq('customer_phone', phone).limit(1)
+    // Returning customer? Prefill name and email from their last order.
+    const { data: pastOrders } = await db.from('orders')
+      .select('customer_name, customer_email')
+      .eq('customer_phone', phone)
+      .order('created_at', { ascending: false })
+      .limit(1)
     if (pastOrders && pastOrders.length > 0) {
       S.welcomeBack = true
       S.formData.name = pastOrders[0].customer_name
       S.customer.name = pastOrders[0].customer_name
+      if (!email && pastOrders[0].customer_email) {
+        S.formData.email = pastOrders[0].customer_email
+        S.customer.email = pastOrders[0].customer_email
+      }
     }
     S.view = 'customer-menu'
     render()
@@ -1018,7 +1172,9 @@ document.addEventListener('click', async (e) => {
     if (error) { S.error = 'Login failed. Check your email and password.'; render(); return }
     if (email !== CFG.adminEmail) { await db.auth.signOut(); S.error = 'Not authorised.'; render(); return }
     S.adminUser = data.user
+    if (!S.adminWeek) S.adminWeek = weekStart()
     await loadAllOrders()
+    await loadMenuForAdmin()
     S.view = 'admin-dashboard'; render()
   }
 
@@ -1028,37 +1184,38 @@ document.addEventListener('click', async (e) => {
 
   else if (action === 'switch-tab') {
     S.adminTab = el.dataset.tab
-    if (S.adminTab === 'orders') await loadAllOrders()
+    if (S.adminTab === 'orders')    await loadAllOrders()
+    if (S.adminTab === 'customers') await loadCustomers()
+    if (S.adminTab === 'menu')      await loadMenuForAdmin()
     render()
   }
 
   else if (action === 'save-menu') {
-    // Collect side/protein fields
-    document.querySelectorAll('[data-field="menu-side"],[data-field="menu-protein"]').forEach(inp => {
-      const field = inp.dataset.field.replace('menu-', '')
-      const day = inp.dataset.day
-      if (!S.menuDraft[day]) S.menuDraft[day] = {}
-      S.menuDraft[day][field] = inp.value.trim()
+    const draft = {}
+    document.querySelectorAll('[data-field="menu-cat"]').forEach(inp => {
+      const day = inp.dataset.day, cat = inp.dataset.cat, idx = parseInt(inp.dataset.idx)
+      if (!draft[day]) draft[day] = {}
+      if (!draft[day][cat]) draft[day][cat] = []
+      draft[day][cat][idx] = inp.value.trim()
     })
-    // Collect options (multiple per day)
-    document.querySelectorAll('[data-field="menu-option"]').forEach(inp => {
-      const day = inp.dataset.day
-      const idx = parseInt(inp.dataset.idx)
-      if (!S.menuDraft[day]) S.menuDraft[day] = {}
-      if (!S.menuDraft[day].options) S.menuDraft[day].options = []
-      S.menuDraft[day].options[idx] = inp.value.trim()
+    // Drop blanks, and drop days with nothing set
+    Object.keys(draft).forEach(day => {
+      let any = false
+      Object.keys(draft[day]).forEach(cat => {
+        draft[day][cat] = (draft[day][cat] || []).filter(Boolean)
+        if (draft[day][cat].length) any = true
+        else delete draft[day][cat]
+      })
+      if (!any) delete draft[day]
     })
-    // Clean empty options
-    DAYS.forEach(day => {
-      if (S.menuDraft[day]?.options) {
-        S.menuDraft[day].options = S.menuDraft[day].options.filter(o => o)
-      }
-    })
+    S.menuDraft = draft
+
     S.loading = true; render()
     const ok = await saveMenu()
     await loadMenu()
+    await loadMenuForAdmin()
     S.loading = false
-    if (ok) { S.msg = '✓ Menu saved successfully!' } else { S.error = 'Save failed. Please try again.' }
+    if (ok) { S.msg = '\u2713 Menu saved for ' + fmtWeek(S.adminWeek || weekStart()) } else { S.error = 'Save failed. Please try again.' }
     render()
   }
 })
@@ -1069,7 +1226,9 @@ document.addEventListener('change', async (e) => {
   if (el.dataset.action === 'update-status') {
     await updateStatus(el.dataset.id, el.value)
   } else if (el.dataset.action === 'choose-option') {
-    S.sel.choices[el.dataset.day] = el.value
+    const day = el.dataset.day, cat = el.dataset.cat
+    if (!S.sel.choices[day]) S.sel.choices[day] = {}
+    S.sel.choices[day][cat] = el.value
     render()
   }
 })
@@ -1101,7 +1260,9 @@ async function boot() {
     const { data: { session } } = await db.auth.getSession()
     if (session?.user?.email === CFG.adminEmail) {
       S.adminUser = session.user
+      if (!S.adminWeek) S.adminWeek = weekStart()
       await loadAllOrders()
+      await loadMenuForAdmin()
       S.view = 'admin-dashboard'
     } else if (window.location.hash === '#admin') {
       S.view = 'admin-login'
