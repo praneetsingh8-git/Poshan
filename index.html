@@ -427,6 +427,8 @@ let S = {
   showHistory: false,
   showAbout: false,
   showMenuSoon: false,
+  pricing: null,
+  orderType: 'plan',
   welcomeBack: false,
   adminUser: null,
   weeklyMenu: null,
@@ -511,6 +513,18 @@ const BABY_FACTS = [
   'Lanugo, the fine soft hair that covers babies in the womb, is usually shed before birth.',
   'Most babies lose their newborn hair in the first few months, then grow it all back.'
 ]
+
+function money(n) { return '$' + (Number(n) || 0).toFixed(2) }
+
+function planFee() {
+  if (S.orderType === 'sample') return 0
+  return S.pricing?.plan_fee_due ? (S.pricing.plan_price || 0) : 0
+}
+
+function orderTotal() {
+  if (S.orderType === 'sample') return S.pricing?.sample_price || 0
+  return planFee() + extraTotal()
+}
 
 // Which stages an add-on applies to
 function extraAppliesTo(ex, stage) {
@@ -629,6 +643,10 @@ async function submitOrder() {
     customer_phone: S.customer.phone,
     customer_email: S.customer.email || null,
     stage:          S.customer.stage || null,
+    order_type:     S.orderType,
+    plan_fee:       planFee(),
+    extras_total:   S.orderType === 'sample' ? 0 : extraTotal(),
+    amount_due:     orderTotal(),
     week_start:     weekStart(),
     delivery_days:  daysEncoded,
     extras:         extrasArr,
@@ -995,6 +1013,50 @@ function vCustomerMenu() {
     </div>`
   }).join('')
 
+  const P = S.pricing || {}
+  const canSample = P.sample_available && !S.history.length
+
+  const sampleOffer = canSample ? `
+    <div style="background:linear-gradient(135deg,#fdf3e8,#fde8f3);border:1px solid #f0d0b8;border-radius:14px;padding:16px 18px;margin-bottom:18px;">
+      <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:#b07a3a;font-weight:600;margin-bottom:6px;">New to Poshan?</div>
+      <div style="font-size:14px;color:var(--text);line-height:1.6;margin-bottom:12px;">
+        Try a single meal before committing to the monthly plan.
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button class="btn ${S.orderType === 'plan' ? 'btn-primary' : 'btn-ghost'} btn-sm" data-action="order-type" data-type="plan" style="flex:1;">
+          Monthly plan
+        </button>
+        <button class="btn ${S.orderType === 'sample' ? 'btn-primary' : 'btn-ghost'} btn-sm" data-action="order-type" data-type="sample" style="flex:1;">
+          ${P.sample_name || 'Sample Meal'} \u00b7 ${money(P.sample_price)}
+        </button>
+      </div>
+    </div>` : ''
+
+  const sampleDetail = `
+    <div class="card" style="border-color:var(--pink);">
+      <div style="font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:500;color:var(--text);margin-bottom:6px;">
+        ${P.sample_name || 'Sample Meal'}
+      </div>
+      <div style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:14px;">
+        ${P.sample_desc || ''}
+      </div>
+      <div style="font-size:11px;letter-spacing:0.1em;text-transform:uppercase;color:var(--pink-dark);font-weight:600;margin-bottom:9px;">
+        Which day would you like it?
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${DAYS.filter(d => dayHasMenu((S.weeklyMenu?.menu || {})[d])).map(d => {
+          const on = S.sel.days.has(d)
+          return `<button data-action="sample-day" data-day="${d}"
+            style="border:1px solid ${on ? 'var(--pink-dark)' : 'var(--border)'};background:${on ? 'var(--pink-dark)' : 'var(--white)'};color:${on ? '#fff' : 'var(--text-mid)'};border-radius:100px;padding:8px 15px;font-size:12.5px;font-weight:500;cursor:pointer;font-family:inherit;">
+            ${DAY_LABELS[d]}
+          </button>`
+        }).join('')}
+      </div>
+      <div style="margin-top:14px;padding-top:12px;border-top:1px solid var(--border);font-size:12px;color:var(--text-light);line-height:1.6;">
+        One-off trial. No monthly fee, no commitment.
+      </div>
+    </div>`
+
   const selDays = [...S.sel.days]
   const visibleExtras = S.extras.filter(ex => extraAppliesTo(ex, S.customer?.stage))
 
@@ -1044,26 +1106,39 @@ function vCustomerMenu() {
     <div class="card" style="border-color:var(--blue);background:var(--blue-light);">
       <div style="font-size:13px;color:#2a5a8a;line-height:1.8;">
         <div style="font-weight:600;margin-bottom:8px;">How to pay</div>
-        <div>Send Interac e-Transfer to:</div>
+        <div>Send an Interac e-Transfer of <strong style="font-size:15px;">${money(orderTotal())}</strong> to:</div>
         <div style="font-weight:600;font-size:15px;margin:4px 0;">${CFG.etransfer}</div>
-        <div style="color:#4a80b0;font-size:12px;">Message: Poshan - ${S.customer?.name || ''}</div>
+        <div style="color:#4a80b0;font-size:12px;">We'll email you the order number to quote in the message.</div>
         ${CFG.stripeLink ? `<div style="margin-top:10px;"><a href="${CFG.stripeLink}" target="_blank" style="color:#2a5a8a;font-weight:600;">Or pay online via card \u2192</a></div>` : ''}
       </div>
     </div>` : ''
 
-  const summaryHtml = selectedDays.length === 0
-    ? `<div class="summary-empty">Select delivery days above</div>`
-    : `${selectedDays.map(d => {
-        const picks = S.sel.choices[d] || {}
-        return `<div class="summary-row" style="align-items:flex-start;"><span style="flex-shrink:0;">${DAY_LABELS[d]}</span><span style="text-align:right;">${picksText(picks) || '\u2014'}</span></div>`
-      }).join('')}
+  const fee = planFee()
+  const total = orderTotal()
+
+  const summaryHtml = S.orderType === 'sample'
+    ? (selectedDays.length === 0
+        ? `<div class="summary-empty">Pick a day for your sample meal</div>`
+        : `<div class="summary-row"><span>${P.sample_name || 'Sample Meal'}</span><span>${DAY_LABELS[selectedDays[0]]}</span></div>
+           <div class="summary-row total"><span>Total due</span><span>${money(total)}</span></div>`)
+    : (selectedDays.length === 0
+      ? `<div class="summary-empty">Select delivery days above</div>`
+      : `${selectedDays.map(d => {
+          const picks = S.sel.choices[d] || {}
+          return `<div class="summary-row" style="align-items:flex-start;"><span style="flex-shrink:0;">${DAY_LABELS[d]}</span><span style="text-align:right;">${picksText(picks) || '\u2014'}</span></div>`
+        }).join('')}
      ${Object.entries(S.sel.extras).filter(([,sel])=>sel && sel.days && sel.days.length).map(([id,sel])=>{
        const ex = S.extras.find(e=>e.id===id)
        if (!ex) return ''
        const line = extraLineTotal(ex, sel)
-       return `<div class="summary-row" style="align-items:flex-start;"><span style="flex:1;">${ex.name}<br><span style="font-size:11px;color:var(--text-light);">${sel.days.map(d=>DAY_LABELS[d].slice(0,3)).join(', ')}</span></span><span style="white-space:nowrap;">${line > 0 ? '+$'+line.toFixed(2) : 'Free'}</span></div>`
+       return `<div class="summary-row" style="align-items:flex-start;"><span style="flex:1;">${ex.name}<br><span style="font-size:11px;color:var(--text-light);">${sel.days.map(d=>DAY_LABELS[d].slice(0,3)).join(', ')}</span></span><span style="white-space:nowrap;">${line > 0 ? '+'+money(line) : 'Free'}</span></div>`
      }).join('')}
-     <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''}</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '\u2713'}</span></div>`
+     <div class="summary-row" style="border-top:1px solid var(--pink);padding-top:9px;margin-top:5px;">
+       <span>${fee > 0 ? 'Monthly plan' : 'Monthly plan'}</span>
+       <span>${fee > 0 ? money(fee) : '<span style="color:var(--text-light);font-size:12px;">Already paid this month</span>'}</span>
+     </div>
+     ${extrasTotal > 0 ? `<div class="summary-row"><span>Add-ons</span><span>${money(extrasTotal)}</span></div>` : ''}
+     <div class="summary-row total"><span>Total due</span><span>${money(total)}</span></div>`)
 
   return `
   ${vHeader(false)}
@@ -1084,9 +1159,11 @@ function vCustomerMenu() {
 
       ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
 
-      <div class="day-grid">${dayCards}</div>
+      ${sampleOffer}
 
-      ${extrasHtml}
+      ${S.orderType === 'sample' ? sampleDetail : `<div class="day-grid">${dayCards}</div>`}
+
+      ${S.orderType === 'sample' ? '' : extrasHtml}
 
       ${!S.customer?.email ? `
       <div class="section-head" style="margin-top:24px;"><h3>Your email</h3></div>
@@ -1122,7 +1199,9 @@ function vCustomerMenu() {
       <button class="btn btn-primary btn-full ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}"
         data-action="submit-order" ${S.loading || selectedDays.length === 0 ? 'disabled' : ''}
         style="margin-top:16px;">
-        ${S.loading ? 'Placing order\u2026' : selectedDays.length === 0 ? 'Select at least one day' : 'Place Order \u2192'}
+        ${S.loading ? 'Placing order\u2026'
+          : selectedDays.length === 0 ? (S.orderType === 'sample' ? 'Pick a day' : 'Select at least one day')
+          : `Place Order \u00b7 ${money(orderTotal())} \u2192`}
       </button>
       <p style="font-size:11px;color:var(--text-light);text-align:center;margin-top:10px;">Send your e-Transfer after placing the order. We'll confirm delivery via phone.</p>
     </div>
@@ -1525,6 +1604,28 @@ document.addEventListener('click', async (e) => {
   else if (action === 'week-today') {
     S.adminWeek = weekStart(); await loadAllOrders(); await loadMenuForAdmin(); render()
   }
+  else if (action === 'order-type') {
+    const t = el.dataset.type
+    if (t !== S.orderType) {
+      S.orderType = t
+      S.sel.days.clear()
+      S.sel.choices = {}
+      S.sel.extras = {}
+      S.error = null
+    }
+    render()
+  }
+  else if (action === 'sample-day') {
+    // A sample is one meal, so only one day
+    const day = el.dataset.day
+    S.sel.days.clear()
+    S.sel.choices = {}
+    S.sel.days.add(day)
+    const cats = dayCategories(S.weeklyMenu?.menu?.[day])
+    S.sel.choices[day] = {}
+    cats.forEach(c => { S.sel.choices[day][c.key] = c.opts[0] })
+    render()
+  }
   else if (action === 'extra-day') {
     const id = el.dataset.id, day = el.dataset.day
     if (!S.sel.extras[id]) S.sel.extras[id] = { days: [] }
@@ -1557,6 +1658,7 @@ document.addEventListener('click', async (e) => {
     const res = await lookupCustomer(phone)
     S.loading = false
 
+    S.pricing = res?.pricing || null
     if (res && res.found) {
       S.history = res.history || []
       // fill blanks from their profile, never overwrite what they just typed
