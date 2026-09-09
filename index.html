@@ -182,6 +182,42 @@ body {
 }
 
 /* ── EXTRAS ── */
+/* -- STAGE SELECT -- */
+.stage-grid { display:flex; flex-direction:column; gap:8px; }
+.stage-btn {
+  display:flex; align-items:center; gap:12px; width:100%;
+  padding:13px 15px; border-radius:12px; cursor:pointer;
+  border:1.5px solid var(--border); background:var(--white);
+  font-family:'Jost',sans-serif; text-align:left;
+  transition:border-color .15s, background .15s;
+}
+.stage-btn:hover { border-color:var(--pink); background:var(--cream); }
+.stage-btn.on {
+  border-color:var(--pink-dark);
+  background:linear-gradient(135deg,#fde8f3,#f6ecfd);
+}
+.stage-ic {
+  width:38px; height:38px; border-radius:50%; flex-shrink:0;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; background:var(--cream);
+  transition:background .15s;
+}
+.stage-btn.on .stage-ic { background:rgba(255,255,255,.75); }
+.stage-tx { flex:1; min-width:0; }
+.stage-nm { display:block; font-size:14.5px; font-weight:500; color:var(--text); line-height:1.25; }
+.stage-btn.on .stage-nm { color:var(--pink-deep); font-weight:600; }
+.stage-sb { display:block; font-size:11.5px; color:var(--text-light); margin-top:2px; }
+.stage-btn.on .stage-sb { color:#a8709c; }
+.stage-tick {
+  width:20px; height:20px; border-radius:50%; flex-shrink:0;
+  border:1.5px solid var(--border); background:var(--white);
+  display:flex; align-items:center; justify-content:center;
+  transition:all .15s;
+}
+.stage-btn.on .stage-tick { background:var(--pink-dark); border-color:var(--pink-dark); }
+.stage-tick svg { display:none; }
+.stage-btn.on .stage-tick svg { display:block; }
+
 .extras-grid { display: flex; flex-direction: column; gap: 8px; }
 .extra-row {
   display: flex; align-items: center; gap: 12px;
@@ -385,7 +421,7 @@ let S = {
   formData: { name: '', phone: '', email: '', stage: '' },
   adminWeek: null,
   allCustomers: [],
-  factIndex: 0,
+  factIndex: Math.floor(Math.random() * 20),
   stageMsg: null,
   history: [],
   showHistory: false,
@@ -819,12 +855,14 @@ function vCustomerForm() {
 
   const stageBtns = STAGES.map(s => {
     const on = S.formData.stage === s.key
-    return `<button class="option-btn ${on ? 'selected' : ''}" data-action="choose-stage" data-stage="${s.key}"
-      style="display:flex;align-items:center;gap:10px;text-align:left;">
-      <span style="font-size:18px;flex-shrink:0;">${s.icon}</span>
-      <span>
-        <span class="ob-label" style="display:block;">${s.label}</span>
-        <span class="ob-sub" style="display:block;">${s.sub}</span>
+    return `<button class="stage-btn ${on ? 'on' : ''}" data-action="choose-stage" data-stage="${s.key}">
+      <span class="stage-ic">${s.icon}</span>
+      <span class="stage-tx">
+        <span class="stage-nm">${s.label}</span>
+        <span class="stage-sb">${s.sub}</span>
+      </span>
+      <span class="stage-tick">
+        <svg width="11" height="11" viewBox="0 0 12 12"><path d="M2 6l3 3 5-5" stroke="white" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg>
       </span>
     </button>`
   }).join('')
@@ -867,7 +905,7 @@ function vCustomerForm() {
         <div class="field" style="margin-bottom:0;">
           <label>Where are you right now?</label>
           <p class="field-hint" style="margin-top:-2px;margin-bottom:9px;">This is how we tailor your meals and add-ons</p>
-          <div class="option-grid">${stageBtns}</div>
+          <div class="stage-grid">${stageBtns}</div>
           ${msg}
         </div>
       </div>
@@ -878,14 +916,11 @@ function vCustomerForm() {
 
       <div style="background:var(--white);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:20px;">
         <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;">
-          <span style="font-size:13px;">\u{2728}</span>
+          <span style="font-size:13px;">\u2728</span>
           <span style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--pink-dark);font-weight:600;">Did you know</span>
         </div>
-        <div id="baby-fact" style="font-size:13.5px;color:var(--text-mid);line-height:1.7;min-height:46px;transition:opacity 0.4s;">
+        <div style="font-size:13.5px;color:var(--text-mid);line-height:1.7;">
           ${fact}
-        </div>
-        <div style="display:flex;gap:4px;margin-top:12px;">
-          ${BABY_FACTS.map((_, i) => `<div style="height:2px;flex:1;border-radius:2px;background:${i === (S.factIndex % BABY_FACTS.length) ? 'var(--pink-dark)' : 'var(--border)'};transition:background 0.3s;"></div>`).join('')}
         </div>
       </div>
 
@@ -1394,30 +1429,6 @@ function adminExtrasTab() {
 // ================================================================
 // RENDER
 // ================================================================
-let factTimer = null
-
-function startFactCycle() {
-  if (factTimer) return
-  factTimer = setInterval(() => {
-    if (S.view !== 'customer-form') { clearInterval(factTimer); factTimer = null; return }
-    const el = document.getElementById('baby-fact')
-    if (!el) return
-    el.style.opacity = '0'
-    setTimeout(() => {
-      S.factIndex = (S.factIndex + 1) % BABY_FACTS.length
-      el.textContent = BABY_FACTS[S.factIndex]
-      el.style.opacity = '1'
-      const wrap = el.parentElement
-      if (wrap) {
-        const dots = wrap.querySelectorAll('div[style*="height:2px"]')
-        dots.forEach((d, i) => {
-          d.style.background = (i === S.factIndex) ? 'var(--pink-dark)' : 'var(--border)'
-        })
-      }
-    }, 400)
-  }, 6000)
-}
-
 function render() {
   const root = document.getElementById('root')
   const views = {
@@ -1430,7 +1441,6 @@ function render() {
     'admin-dashboard': vAdminDashboard
   }
   root.innerHTML = (views[S.view] || vLanding)()
-  if (S.view === 'customer-form') startFactCycle()
 }
 
 // ================================================================
