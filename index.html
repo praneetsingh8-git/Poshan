@@ -360,7 +360,13 @@ const CFG = {
   key:          'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVydmR6dGxxdmZwemlmZGNuZHVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY1MzgyMTgsImV4cCI6MjEwMjExNDIxOH0.ABqrNa197i5rY0wZZ6bhoAjTXH8cPlkphwmBGkFlr6U',
   adminEmail:   'praneetsingh8@gmail.com',
   etransfer:    'praneetsingh8@gmail.com',   // Interac e-Transfer email
-  stripeLink:   ''                            // paste Stripe payment link here (optional)
+  stripeLink:   '',                           // paste Stripe payment link here (optional)
+
+  // Supabase auto-generates a URL slug when you deploy via the editor,
+  // and it does NOT change when you rename the function. This must match
+  // the slug shown in the function's URL, not its display name.
+  // Edge Functions -> customer-lookup -> the last part of its URL.
+  lookupFn:     'dynamic-task'
 }
 
 // ================================================================
@@ -376,9 +382,15 @@ const DAY_LABELS = { monday:'Monday', tuesday:'Tuesday', wednesday:'Wednesday', 
 let S = {
   view: 'landing',
   customer: null,
-  formData: { name: '', phone: '', email: '' },
+  formData: { name: '', phone: '', email: '', stage: '' },
   adminWeek: null,
   allCustomers: [],
+  factIndex: 0,
+  stageMsg: null,
+  history: [],
+  showHistory: false,
+  showAbout: false,
+  showMenuSoon: false,
   welcomeBack: false,
   adminUser: null,
   weeklyMenu: null,
@@ -415,6 +427,68 @@ function cap(str) { return str ? str.charAt(0).toUpperCase() + str.slice(1) : ''
 
 // Standing text shown on every menu
 const MEAL_INCLUDES = 'Every meal comes with 4 rotis and a portion of jeera rice or plain rice.'
+
+// ---- Stages -------------------------------------------------
+const STAGES = [
+  { key: 't1',         label: 'First trimester',  sub: 'Weeks 1\u201313',  icon: '\u{1F331}' },
+  { key: 't2',         label: 'Second trimester', sub: 'Weeks 14\u201326', icon: '\u{1F338}' },
+  { key: 't3',         label: 'Third trimester',  sub: 'Weeks 27\u201340', icon: '\u{1F337}' },
+  { key: 'new_parent', label: 'New parent',       sub: 'Baby has arrived',  icon: '\u{1F476}' }
+]
+
+const STAGE_MESSAGES = {
+  t1: { title: 'The early days \u{1F331}',
+        body: 'Queasy mornings and odd cravings are par for the course. We keep first-trimester meals gentle, lighter on spice, and easy on a sensitive stomach.' },
+  t2: { title: 'The golden stretch \u{1F338}',
+        body: 'Energy usually comes back around now, and appetite with it. This is the stretch where iron and protein matter most \u2014 our menu leans into both.' },
+  t3: { title: 'Nearly there \u{1F337}',
+        body: 'Smaller meals sit better as things get snug. We keep portions comfortable and nutrition dense, so every bite counts.' },
+  new_parent: { title: 'Congratulations \u{1F476}',
+        body: 'Recovery and feeding both take real fuel. Our new-parent meals lean warm, nourishing and easy to eat one-handed at odd hours.' }
+}
+
+function stageLabel(key) {
+  const s = STAGES.find(x => x.key === key)
+  return s ? s.label : ''
+}
+
+// ---- Baby facts ---------------------------------------------
+const BABY_FACTS = [
+  'A baby\u2019s heart starts beating around week 6 \u2014 before most people even know they\u2019re expecting.',
+  'Babies are born with around 300 bones. Adults have 206 \u2014 the rest fuse together as they grow.',
+  'Flavours from what you eat travel into the amniotic fluid, so your baby is tasting your cooking already.',
+  'Fingerprints are fully formed by around week 17, and they never change for the rest of their life.',
+  'Newborns cry without tears for the first few weeks \u2014 tear ducts take a little while to open up.',
+  'Your baby knows your voice at birth. They\u2019ve been listening to it for months.',
+  'Babies start practising sucking their thumb from around week 15.',
+  'Hiccups in the womb are completely normal and often start around week 24.',
+  'Newborns see best at about 20\u201330 cm \u2014 roughly the distance to your face while feeding.',
+  'Roughly half of a newborn\u2019s sleep is REM sleep, which means they dream a great deal.',
+  'A newborn\u2019s stomach is about the size of a cherry on day one.',
+  'Babies breathe amniotic fluid in the womb \u2014 it\u2019s how their lungs practise for air.',
+  'The womb is a noisy place: your heartbeat, your digestion, and every conversation you have.',
+  'A baby\u2019s sense of smell is sharp at birth. They can pick out their mother within days.',
+  'Nothing in life grows faster than a baby in the womb.',
+  'Many babies are most active in the evening, right when you finally sit down.',
+  'A newborn\u2019s head is about a quarter of their total body length.',
+  'Babies smile in their sleep long before they smile at you \u2014 usually around 6 to 8 weeks.',
+  'Lanugo, the fine soft hair that covers babies in the womb, is usually shed before birth.',
+  'Most babies lose their newborn hair in the first few months, then grow it all back.'
+]
+
+// Which stages an add-on applies to
+function extraAppliesTo(ex, stage) {
+  if (!stage) return true
+  const st = ex.stages
+  if (!st || !st.length) return true
+  return st.includes(stage)
+}
+
+// Total for one add-on = price x number of days ticked
+function extraLineTotal(ex, sel) {
+  const days = (sel && sel.days) || []
+  return (ex.price || 0) * days.length
+}
 
 const CATEGORIES = [
   { key: 'iron',    label: 'Iron rich',    icon: '\u{1FA78}' },
@@ -464,9 +538,9 @@ function picksText(picks) {
 }
 
 function extraTotal() {
-  return Object.entries(S.sel.extras).reduce((sum, [id, qty]) => {
+  return Object.entries(S.sel.extras).reduce((sum, [id, sel]) => {
     const ex = S.extras.find(e => e.id === id)
-    return sum + (ex ? ex.price * qty : 0)
+    return sum + (ex ? extraLineTotal(ex, sel) : 0)
   }, 0)
 }
 
@@ -484,28 +558,51 @@ async function loadExtras() {
   S.extras = data || []
 }
 
-async function checkExistingOrder(phone) {
-  const { data } = await db.from('orders').select('*').eq('customer_phone', phone).eq('week_start', weekStart()).maybeSingle()
-  S.existingOrder = data
+async function lookupCustomer(phone) {
+  try {
+    const { data, error } = await db.functions.invoke(CFG.lookupFn, {
+      body: { phone, week_start: weekStart() }
+    })
+    if (error) { console.error('lookup failed', error); return null }
+    return data
+  } catch (e) {
+    console.error('lookup threw', e)
+    return null
+  }
 }
 
 async function submitOrder() {
-  const extrasArr = Object.entries(S.sel.extras).filter(([,q]) => q > 0).map(([id, qty]) => {
-    const ex = S.extras.find(e => e.id === id)
-    return { id, name: ex?.name || '', qty, price: ex?.price || 0 }
-  })
+  const extrasArr = Object.entries(S.sel.extras)
+    .filter(([, sel]) => sel && sel.days && sel.days.length)
+    .map(([id, sel]) => {
+      const ex = S.extras.find(e => e.id === id)
+      return {
+        id,
+        name:  ex?.name || '',
+        price: ex?.price || 0,
+        days:  sel.days,
+        qty:   sel.days.length,
+        total: extraLineTotal(ex || {}, sel)
+      }
+    })
+
   const daysEncoded = [...S.sel.days].map(d => encodeDay(d, S.sel.choices[d]))
-  const { error } = await db.from('orders').insert({
-    customer_name: S.customer.name,
+
+  const { data, error } = await db.from('orders').insert({
+    customer_name:  S.customer.name,
     customer_phone: S.customer.phone,
     customer_email: S.customer.email || null,
-    week_start: weekStart(),
-    delivery_days: daysEncoded,
-    extras: extrasArr,
+    stage:          S.customer.stage || null,
+    week_start:     weekStart(),
+    delivery_days:  daysEncoded,
+    extras:         extrasArr,
     pregnancy_plan: S.sel.pregnancy,
-    notes: S.sel.notes,
-    status: 'pending'
-  })
+    notes:          S.sel.notes,
+    status:         'pending',
+    payment_status: 'unpaid'
+  }).select('order_ref').maybeSingle()
+
+  if (!error && data?.order_ref) S.lastOrderRef = data.order_ref
   return !error
 }
 
@@ -574,55 +671,225 @@ function vHeader(showAdmin = true) {
   </header>`
 }
 
+function vAboutModal() {
+  if (!S.showAbout) return ''
+  return `
+  <div data-action="close-about" style="position:fixed;inset:0;background:rgba(42,31,46,0.55);z-index:200;display:flex;align-items:flex-end;justify-content:center;padding:0;backdrop-filter:blur(3px);">
+    <div data-action="modal-noop" style="background:var(--white);width:100%;max-width:480px;max-height:88vh;overflow-y:auto;border-radius:20px 20px 0 0;padding:0;">
+
+      <div style="position:sticky;top:0;background:var(--white);padding:20px 24px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:500;color:var(--text);">What is Poshan?</div>
+          <div style="font-size:11px;color:var(--text-light);letter-spacing:0.14em;text-transform:uppercase;margin-top:2px;">Nourishment for two</div>
+        </div>
+        <button data-action="close-about" style="background:var(--cream);border:none;width:32px;height:32px;border-radius:50%;font-size:18px;color:var(--text-mid);cursor:pointer;line-height:1;">\u00d7</button>
+      </div>
+
+      <div style="padding:22px 24px 32px;">
+
+        <p style="font-size:14px;color:var(--text-mid);line-height:1.75;margin-bottom:24px;">
+          Poshan is a home kitchen making fresh Indian meals for expecting and new parents across east GTA.
+          Every meal is cooked the morning it\u2019s delivered \u2014 no preservatives, no reheating a batch from last week.
+        </p>
+
+        <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--pink-dark);font-weight:600;margin-bottom:14px;">How it works</div>
+
+        <div style="display:flex;flex-direction:column;gap:0;margin-bottom:28px;">
+
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;">
+              <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#e87ab0,#b095d0);color:white;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;">1</div>
+              <div style="width:2px;flex:1;min-height:26px;background:var(--border);"></div>
+            </div>
+            <div style="padding-bottom:18px;">
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">Pick your days</div>
+              <div style="font-size:13px;color:var(--text-mid);line-height:1.65;">
+                A new menu goes up each week. Choose which days you want delivery \u2014 all six or just a couple.
+                For each day you pick one iron-rich and one protein-rich dish.
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="display:flex;flex-direction:column;align-items:center;flex-shrink:0;">
+              <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#e87ab0,#b095d0);color:white;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;">2</div>
+              <div style="width:2px;flex:1;min-height:26px;background:var(--border);"></div>
+            </div>
+            <div style="padding-bottom:18px;">
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">Add anything extra</div>
+              <div style="font-size:13px;color:var(--text-mid);line-height:1.65;">
+                Extra rotis, a bigger paneer portion, kheer for the weekend.
+                Add-ons are suggested based on your stage, and you choose which days they come on.
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;gap:14px;align-items:flex-start;">
+            <div style="flex-shrink:0;">
+              <div style="width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#e87ab0,#b095d0);color:white;display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:600;">3</div>
+            </div>
+            <div>
+              <div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:3px;">We deliver to your door</div>
+              <div style="font-size:13px;color:var(--text-mid);line-height:1.65;">
+                Fresh that morning, at your home before the day gets going.
+                You\u2019ll get an email confirming the order, and we\u2019ll call to confirm delivery.
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <div style="background:var(--blue-light);border:1px solid var(--blue);border-radius:10px;padding:14px 16px;font-size:13px;color:#2a5a8a;line-height:1.65;margin-bottom:16px;">
+          \u{1F35A} <strong>Every meal includes</strong> 4 rotis and a portion of jeera rice or plain rice \u2014 always, at no extra cost.
+        </div>
+
+        <div style="background:var(--pink-light);border-radius:10px;padding:14px 16px;font-size:13px;color:var(--pink-deep);line-height:1.65;margin-bottom:16px;">
+          \u{1F338} <strong>Meals change with your stage.</strong> First trimester leans gentle and light.
+          Second and third lean into iron and protein. New parents get warm, easy, one-handed food.
+        </div>
+
+        <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-light);font-weight:600;margin-bottom:8px;">Payment</div>
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:22px;">
+          Interac e-Transfer after you place your order. We\u2019ll email you once it\u2019s received.
+          No card details, no subscription that\u2019s hard to cancel.
+        </p>
+
+        <div style="font-size:11px;letter-spacing:0.12em;text-transform:uppercase;color:var(--text-light);font-weight:600;margin-bottom:8px;">Where we deliver</div>
+        <p style="font-size:13px;color:var(--text-mid);line-height:1.7;margin-bottom:24px;">
+          Scarborough, Markham, Pickering, Ajax, Whitby and Oshawa.
+        </p>
+
+        <button class="btn btn-primary btn-full" data-action="go-customer">Order This Week\u2019s Meals</button>
+      </div>
+    </div>
+  </div>`
+}
+
+function menuIsReady() {
+  const m = S.weeklyMenu?.menu
+  if (!m) return false
+  return DAYS.some(d => dayHasMenu(m[d]))
+}
+
+function vMenuSoonModal() {
+  if (!S.showMenuSoon) return ''
+  return `
+  <div data-action="close-menusoon" style="position:fixed;inset:0;background:rgba(42,31,46,0.55);z-index:210;display:flex;align-items:center;justify-content:center;padding:24px;backdrop-filter:blur(3px);">
+    <div data-action="modal-noop" style="background:var(--white);width:100%;max-width:380px;border-radius:18px;padding:32px 28px;text-align:center;">
+      <div style="font-size:40px;margin-bottom:14px;">\u{1F373}</div>
+      <div style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:500;color:var(--text);margin-bottom:8px;">
+        This week\u2019s menu isn\u2019t up yet
+      </div>
+      <p style="font-size:13.5px;color:var(--text-mid);line-height:1.7;margin-bottom:22px;">
+        We publish the new menu at the start of each week. Check back shortly \u2014
+        or leave us your number and we\u2019ll let you know the moment it\u2019s live.
+      </p>
+      <button class="btn btn-primary btn-full" data-action="close-menusoon">Got it</button>
+      <button class="btn btn-ghost btn-sm" data-action="open-about" style="margin-top:10px;">What is Poshan?</button>
+    </div>
+  </div>`
+}
+
 function vLanding() {
-  const week = S.weeklyMenu ? `<div class="hero-week">🌸 Menu set for ${fmtWeek(S.weeklyMenu.week_start)}</div>` : '<div class="hero-week">⏳ This week\'s menu coming soon</div>'
   return `
   ${vHeader()}
   <div class="page">
     <div class="hero">
       ${logoMark(72)}
       <h1 class="hero-title">Nourishment<br>for <span>two.</span></h1>
-      <p class="hero-sub">Fresh Indian tiffins for expecting families in east GTA. Delivered before your day begins.</p>
-      ${week}
+      <p class="hero-sub">Fresh Indian meals for expecting and new parents, delivered at your home.</p>
+
       <div class="hero-actions">
-        <button class="btn btn-primary btn-full" data-action="go-customer">Order This Week's Meals</button>
-        <p style="font-size:12px;color:var(--text-light);text-align:center;">Scarborough · Pickering · Ajax · Whitby · Oshawa</p>
+        <button class="btn btn-secondary btn-full" data-action="open-about">What is Poshan?</button>
+        <button class="btn btn-primary btn-full" data-action="go-customer">Order This Week\u2019s Meals</button>
+        <p style="font-size:12px;color:var(--text-light);text-align:center;line-height:1.7;">Scarborough \u00b7 Markham \u00b7 Pickering<br>Ajax \u00b7 Whitby \u00b7 Oshawa</p>
       </div>
     </div>
-  </div>`
+  </div>
+  ${vAboutModal()}
+  ${vMenuSoonModal()}`
 }
 
 function vCustomerForm() {
-  const wbMsg = S.welcomeBack ? `<div class="alert alert-success" style="margin-bottom:12px;">👋 Welcome back, ${S.formData.name}! Continuing to your order.</div>` : ''
+  const wbMsg = S.welcomeBack
+    ? `<div class="alert alert-success" style="margin-bottom:12px;">\u{1F44B} Welcome back, ${S.formData.name}! Good to see you again.</div>`
+    : ''
+
+  const fact = BABY_FACTS[S.factIndex % BABY_FACTS.length]
+
+  const stageBtns = STAGES.map(s => {
+    const on = S.formData.stage === s.key
+    return `<button class="option-btn ${on ? 'selected' : ''}" data-action="choose-stage" data-stage="${s.key}"
+      style="display:flex;align-items:center;gap:10px;text-align:left;">
+      <span style="font-size:18px;flex-shrink:0;">${s.icon}</span>
+      <span>
+        <span class="ob-label" style="display:block;">${s.label}</span>
+        <span class="ob-sub" style="display:block;">${s.sub}</span>
+      </span>
+    </button>`
+  }).join('')
+
+  const msg = S.stageMsg ? `
+    <div style="background:linear-gradient(135deg,#fde8f3,#f0ebfd);border:1px solid var(--pink);border-radius:12px;padding:15px 17px;margin-top:12px;">
+      <div style="font-size:14px;font-weight:600;color:var(--pink-deep);margin-bottom:5px;">${S.stageMsg.title}</div>
+      <div style="font-size:13px;color:#7a5070;line-height:1.65;">${S.stageMsg.body}</div>
+    </div>` : ''
+
   return `
   ${vHeader()}
   <div class="page">
     <div style="margin-top:24px;">
       <h2 style="font-family:'Cormorant Garamond',serif;font-size:26px;font-weight:500;margin-bottom:4px;">Your details</h2>
-      <p style="font-size:13px;color:var(--text-light);margin-bottom:24px;">No account needed. Just your name and phone.</p>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:20px;">No account needed. Just a few things so we can get your meals right.</p>
+
       ${wbMsg}
       ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+
       <div class="card">
         <div class="field">
           <label>Your name</label>
-          <input type="text" id="inp-name" placeholder="e.g. Priya" autocomplete="name" value="${S.formData.name}" minlength="3" />
+          <input type="text" id="inp-name" placeholder="e.g. Priya" autocomplete="name" value="${S.formData.name}" />
           <p class="field-hint">At least 3 characters</p>
         </div>
         <div class="field">
           <label>Phone number</label>
           <input type="tel" id="inp-phone" placeholder="+1 (416) 000-0000" autocomplete="tel" value="${S.formData.phone}" />
-          <p class="field-hint" id="phone-hint">At least 10 digits &mdash; we'll find your order next time</p>
+          <p class="field-hint" id="phone-hint">At least 10 digits &mdash; we\u2019ll find your order next time</p>
         </div>
         <div class="field">
-          <label>Email <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-light);">(optional)</span></label>
+          <label>Email <span style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-light);">(optional for now)</span></label>
           <input type="email" id="inp-email" placeholder="you@example.com" autocomplete="email" value="${S.formData.email || ''}" />
-          <p class="field-hint">For order confirmations and the weekly menu</p>
+          <p class="field-hint">We\u2019ll ask for this before you finish your order</p>
         </div>
-        <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="customer-lookup" ${S.loading ? 'disabled' : ''}>
-          ${S.loading ? 'Looking up…' : 'Continue →'}
-        </button>
+
+        <div class="divider"></div>
+
+        <div class="field" style="margin-bottom:0;">
+          <label>Where are you right now?</label>
+          <p class="field-hint" style="margin-top:-2px;margin-bottom:9px;">This is how we tailor your meals and add-ons</p>
+          <div class="option-grid">${stageBtns}</div>
+          ${msg}
+        </div>
       </div>
-      <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:12px;">← Back</button>
+
+      <button class="btn btn-primary btn-full ${S.loading ? 'disabled' : ''}" data-action="customer-lookup" ${S.loading ? 'disabled' : ''} style="margin-top:14px;">
+        ${S.loading ? 'Looking up\u2026' : 'Continue \u2192'}
+      </button>
+
+      <div style="background:var(--white);border:1px solid var(--border);border-radius:12px;padding:16px 18px;margin-top:20px;">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;">
+          <span style="font-size:13px;">\u{2728}</span>
+          <span style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--pink-dark);font-weight:600;">Did you know</span>
+        </div>
+        <div id="baby-fact" style="font-size:13.5px;color:var(--text-mid);line-height:1.7;min-height:46px;transition:opacity 0.4s;">
+          ${fact}
+        </div>
+        <div style="display:flex;gap:4px;margin-top:12px;">
+          ${BABY_FACTS.map((_, i) => `<div style="height:2px;flex:1;border-radius:2px;background:${i === (S.factIndex % BABY_FACTS.length) ? 'var(--pink-dark)' : 'var(--border)'};transition:background 0.3s;"></div>`).join('')}
+        </div>
+      </div>
+
+      <button class="btn btn-ghost btn-sm" data-action="go-landing" style="margin-top:14px;">\u2190 Back</button>
     </div>
   </div>`
 }
@@ -693,24 +960,48 @@ function vCustomerMenu() {
     </div>`
   }).join('')
 
-  const extrasHtml = S.extras.length ? `
-    <div class="section-head"><h3>Extras</h3><p>Add to any delivery day</p></div>
-    <div class="extras-grid">
-      ${S.extras.map(ex => `<div class="extra-row">
-        <div class="extra-info">
-          <div class="extra-name">${ex.name}</div>
-          ${ex.description ? `<div class="extra-desc">${ex.description}</div>` : ''}
-        </div>
-        ${ex.price > 0 ? `<div class="extra-price">+$${ex.price.toFixed(2)}</div>` : ''}
-        <div class="qty-control">
-          <button class="qty-btn" data-action="extra-remove" data-id="${ex.id}">\u2212</button>
-          <span class="qty-num">${S.sel.extras[ex.id] || 0}</span>
-          <button class="qty-btn" data-action="extra-add" data-id="${ex.id}">+</button>
-        </div>
-      </div>`).join('')}
-    </div>` : ''
+  const selDays = [...S.sel.days]
+  const visibleExtras = S.extras.filter(ex => extraAppliesTo(ex, S.customer?.stage))
 
-  const selectedDays = [...S.sel.days]
+  const extrasHtml = visibleExtras.length ? `
+    <div class="section-head">
+      <h3>Add-ons</h3>
+      <p>${S.customer?.stage ? 'Suggested for your ' + stageLabel(S.customer.stage).toLowerCase() : 'Optional extras'} \u00b7 tick the days you want them</p>
+    </div>
+    ${selDays.length === 0
+      ? `<div class="card" style="text-align:center;color:var(--text-light);font-size:13px;padding:18px;">Choose your delivery days first, then you can add extras to them.</div>`
+      : `<div class="extras-grid">
+      ${visibleExtras.map(ex => {
+        const sel  = S.sel.extras[ex.id] || { days: [] }
+        const on   = sel.days.length > 0
+        const line = extraLineTotal(ex, sel)
+        return `<div class="extra-row" style="flex-direction:column;align-items:stretch;gap:0;${on ? 'border-color:var(--pink);background:var(--pink-light);' : ''}">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <div class="extra-info">
+              <div class="extra-name">${ex.name}</div>
+              ${ex.description ? `<div class="extra-desc">${ex.description}</div>` : ''}
+            </div>
+            <div class="extra-price" style="white-space:nowrap;">
+              ${ex.price > 0 ? `+$${ex.price.toFixed(2)}<span style="font-size:10px;color:var(--text-light);font-weight:400;"> / day</span>` : 'Free'}
+            </div>
+          </div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:11px;">
+            ${selDays.map(d => {
+              const picked = sel.days.includes(d)
+              return `<button data-action="extra-day" data-id="${ex.id}" data-day="${d}"
+                style="border:1px solid ${picked ? 'var(--pink-dark)' : 'var(--border)'};background:${picked ? 'var(--pink-dark)' : 'var(--white)'};color:${picked ? '#fff' : 'var(--text-mid)'};border-radius:100px;padding:5px 12px;font-size:11.5px;font-weight:500;cursor:pointer;font-family:inherit;transition:all 0.12s;">
+                ${DAY_LABELS[d].slice(0,3)}
+              </button>`
+            }).join('')}
+          </div>
+          ${on ? `<div style="margin-top:9px;font-size:11.5px;color:var(--pink-deep);font-weight:500;">
+            ${sel.days.length} day${sel.days.length > 1 ? 's' : ''}${ex.price > 0 ? ` \u00b7 $${line.toFixed(2)}` : ''}
+          </div>` : ''}
+        </div>`
+      }).join('')}
+    </div>`}` : ''
+
+  const selectedDays = selDays
   const extrasTotal  = extraTotal()
 
   const paymentBlock = selectedDays.length > 0 ? `
@@ -731,9 +1022,11 @@ function vCustomerMenu() {
         const picks = S.sel.choices[d] || {}
         return `<div class="summary-row" style="align-items:flex-start;"><span style="flex-shrink:0;">${DAY_LABELS[d]}</span><span style="text-align:right;">${picksText(picks) || '\u2014'}</span></div>`
       }).join('')}
-     ${Object.entries(S.sel.extras).filter(([,q])=>q>0).map(([id,qty])=>{
+     ${Object.entries(S.sel.extras).filter(([,sel])=>sel && sel.days && sel.days.length).map(([id,sel])=>{
        const ex = S.extras.find(e=>e.id===id)
-       return `<div class="summary-row"><span>${ex?.name} \u00d7${qty}</span><span>${ex?.price > 0 ? '+$'+(ex.price*qty).toFixed(2) : 'Free'}</span></div>`
+       if (!ex) return ''
+       const line = extraLineTotal(ex, sel)
+       return `<div class="summary-row" style="align-items:flex-start;"><span style="flex:1;">${ex.name}<br><span style="font-size:11px;color:var(--text-light);">${sel.days.map(d=>DAY_LABELS[d].slice(0,3)).join(', ')}</span></span><span style="white-space:nowrap;">${line > 0 ? '+$'+line.toFixed(2) : 'Free'}</span></div>`
      }).join('')}
      <div class="summary-row total"><span>${selectedDays.length} day${selectedDays.length>1?'s':''}</span><span>${extrasTotal > 0 ? `+$${extrasTotal.toFixed(2)} extras` : '\u2713'}</span></div>`
 
@@ -744,9 +1037,11 @@ function vCustomerMenu() {
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
         <button class="btn btn-ghost btn-sm" data-action="back-to-form">\u2190</button>
         <p style="font-size:12px;color:var(--text-light);">Week of ${fmtWeek(S.weeklyMenu?.week_start)}</p>
+        ${S.customer?.stage ? `<span class="day-tag" style="margin-left:auto;">${stageLabel(S.customer.stage)}</span>` : ''}
       </div>
       <h2 style="font-family:'Cormorant Garamond',serif;font-size:24px;font-weight:500;margin-bottom:4px;">This week's menu</h2>
-      <p style="font-size:13px;color:var(--text-light);margin-bottom:14px;">Select your delivery days, ${S.customer?.name || 'friend'}. For each day, pick one iron-rich and one protein-rich dish.</p>
+      <p style="font-size:13px;color:var(--text-light);margin-bottom:${S.history.length ? '10px' : '14px'};">Select your delivery days, ${S.customer?.name || 'friend'}. For each day, pick one iron-rich and one protein-rich dish.</p>
+      ${S.history.length ? `<button class="btn btn-ghost btn-sm" data-action="show-history" style="margin-bottom:14px;">\u{1F4C5} View my past orders (${S.history.length})</button>` : ''}
 
       <div style="background:var(--blue-light);border:1px solid var(--blue);border-radius:10px;padding:12px 14px;font-size:12.5px;color:#2a5a8a;line-height:1.6;margin-bottom:18px;">
         \u{1F35A} ${MEAL_INCLUDES}
@@ -757,6 +1052,16 @@ function vCustomerMenu() {
       <div class="day-grid">${dayCards}</div>
 
       ${extrasHtml}
+
+      ${!S.customer?.email ? `
+      <div class="section-head" style="margin-top:24px;"><h3>Your email</h3></div>
+      <div class="card" style="border-color:var(--pink);">
+        <div class="field" style="margin-bottom:0;">
+          <label>Email address <span style="color:var(--pink-dark);">*</span></label>
+          <input type="email" id="inp-email-menu" placeholder="you@example.com" autocomplete="email" value="${S.formData.email || ''}" />
+          <p class="field-hint">We\u2019ll send your order confirmation here \u2014 this one\u2019s required</p>
+        </div>
+      </div>` : ''}
 
       <div class="section-head" style="margin-top:24px;"><h3>Preferences</h3></div>
       <div class="card">
@@ -786,6 +1091,49 @@ function vCustomerMenu() {
       </button>
       <p style="font-size:11px;color:var(--text-light);text-align:center;margin-top:10px;">Send your e-Transfer after placing the order. We'll confirm delivery via phone.</p>
     </div>
+  </div>
+  ${vHistoryModal()}`
+}
+
+function vHistoryModal() {
+  if (!S.showHistory) return ''
+  const rows = S.history.map(o => {
+    const days = (o.delivery_days || []).map(raw => {
+      const { day, picks } = decodeDay(raw)
+      const txt = picksText(picks)
+      return `<div style="font-size:12px;color:var(--text-mid);line-height:1.5;margin-bottom:3px;">
+        <span class="day-chip">${cap(day)}</span>${txt ? ` <span style="color:var(--text-light);">${txt}</span>` : ''}
+      </div>`
+    }).join('')
+    const ex = (o.extras || []).filter(e => (e.qty || 0) > 0)
+    const paidBadge = o.payment_status === 'paid'
+      ? `<span class="badge badge-delivered">Paid</span>`
+      : `<span class="badge badge-pending">Unpaid</span>`
+    return `<div class="card" style="margin-bottom:10px;">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:var(--text);">Week of ${fmtWeek(o.week_start)}</div>
+          <div style="font-size:11px;color:var(--text-light);font-family:monospace;margin-top:2px;">${o.order_ref || ''}</div>
+        </div>
+        ${paidBadge}
+      </div>
+      ${days}
+      ${ex.length ? `<div style="margin-top:8px;font-size:12px;color:var(--text-light);">Extras: ${ex.map(e => e.name + (e.days ? ' (' + e.days.map(d => DAY_LABELS[d] ? DAY_LABELS[d].slice(0,3) : d).join(', ') + ')' : ' \u00d7' + e.qty)).join(', ')}</div>` : ''}
+    </div>`
+  }).join('')
+
+  return `
+  <div data-action="close-history" style="position:fixed;inset:0;background:rgba(42,31,46,0.55);z-index:200;display:flex;align-items:flex-end;justify-content:center;backdrop-filter:blur(3px);">
+    <div data-action="modal-noop" style="background:var(--cream);width:100%;max-width:480px;max-height:86vh;overflow-y:auto;border-radius:20px 20px 0 0;">
+      <div style="position:sticky;top:0;background:var(--cream);padding:20px 20px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-family:'Cormorant Garamond',serif;font-size:22px;font-weight:500;color:var(--text);">Your past orders</div>
+          <div style="font-size:11px;color:var(--text-light);margin-top:2px;">${S.history.length} order${S.history.length !== 1 ? 's' : ''} with Poshan</div>
+        </div>
+        <button data-action="close-history" style="background:var(--white);border:1px solid var(--border);width:32px;height:32px;border-radius:50%;font-size:18px;color:var(--text-mid);cursor:pointer;line-height:1;">\u00d7</button>
+      </div>
+      <div style="padding:16px 20px 28px;">${rows}</div>
+    </div>
   </div>`
 }
 
@@ -806,7 +1154,7 @@ function vCustomerExisting() {
       <div class="alert alert-info">You've already ordered this week, ${o.customer_name}! Here's your order.</div>
       <div class="card">
         <div class="card-title">Your order</div>
-        <div class="card-sub">Week of ${fmtWeek(o.week_start)}</div>
+        <div class="card-sub">Week of ${fmtWeek(o.week_start)}${o.order_ref ? ` \u00b7 <span style="font-family:monospace;">${o.order_ref}</span>` : ''}</div>
         <div style="margin-bottom:12px;">
           <p style="font-size:12px;color:var(--text-light);margin-bottom:6px;font-weight:500;letter-spacing:0.05em;text-transform:uppercase;">Delivery days</p>
           <div class="order-days">${days}</div>
@@ -833,7 +1181,11 @@ function vCustomerSuccess() {
     <div class="success-wrap">
       <div class="success-icon">🌸</div>
       <h2 class="success-title">Order placed!</h2>
-      <p class="success-sub">Thank you, ${S.customer?.name}!<br>Your tiffin is confirmed for <strong>${days}</strong>.<br><br>We'll reach out on your phone to confirm delivery. See you this week! 💕</p>
+      <p class="success-sub">Thank you, ${S.customer?.name}!<br>Your meals are confirmed for <strong>${days}</strong>.<br><br>A confirmation is on its way to <strong>${S.customer?.email || 'your email'}</strong>. We'll call to confirm delivery.</p>
+      ${S.lastOrderRef ? `<div style="display:inline-block;background:var(--cream);border:1px solid var(--border);border-radius:10px;padding:12px 20px;margin-top:20px;">
+        <div style="font-size:10px;letter-spacing:0.14em;text-transform:uppercase;color:var(--text-light);margin-bottom:3px;">Your order number</div>
+        <div style="font-family:monospace;font-size:16px;font-weight:600;color:var(--pink-deep);">${S.lastOrderRef}</div>
+      </div>` : ''}
       <button class="btn btn-primary" data-action="go-landing" style="margin-top:28px;">← Back to home</button>
     </div>
   </div>`
@@ -1042,6 +1394,30 @@ function adminExtrasTab() {
 // ================================================================
 // RENDER
 // ================================================================
+let factTimer = null
+
+function startFactCycle() {
+  if (factTimer) return
+  factTimer = setInterval(() => {
+    if (S.view !== 'customer-form') { clearInterval(factTimer); factTimer = null; return }
+    const el = document.getElementById('baby-fact')
+    if (!el) return
+    el.style.opacity = '0'
+    setTimeout(() => {
+      S.factIndex = (S.factIndex + 1) % BABY_FACTS.length
+      el.textContent = BABY_FACTS[S.factIndex]
+      el.style.opacity = '1'
+      const wrap = el.parentElement
+      if (wrap) {
+        const dots = wrap.querySelectorAll('div[style*="height:2px"]')
+        dots.forEach((d, i) => {
+          d.style.background = (i === S.factIndex) ? 'var(--pink-dark)' : 'var(--border)'
+        })
+      }
+    }, 400)
+  }, 6000)
+}
+
 function render() {
   const root = document.getElementById('root')
   const views = {
@@ -1054,6 +1430,7 @@ function render() {
     'admin-dashboard': vAdminDashboard
   }
   root.innerHTML = (views[S.view] || vLanding)()
+  if (S.view === 'customer-form') startFactCycle()
 }
 
 // ================================================================
@@ -1066,12 +1443,35 @@ document.addEventListener('click', async (e) => {
   S.error = null; S.msg = null
 
   if (action === 'go-landing') { history.replaceState(null,'',window.location.pathname); S.view = 'landing'; render() }
+  else if (action === 'modal-noop')    { return }
+  else if (action === 'open-about')    { S.showMenuSoon = false; S.showAbout = true; render() }
+  else if (action === 'close-about')   { S.showAbout = false; render() }
+  else if (action === 'show-history')  { S.showHistory = true;  render() }
+  else if (action === 'close-history') { S.showHistory = false; render() }
+  else if (action === 'choose-stage') {
+    // keep whatever they've typed so far
+    const n = document.getElementById('inp-name')?.value
+    const p = document.getElementById('inp-phone')?.value
+    const e = document.getElementById('inp-email')?.value
+    if (n !== undefined) S.formData.name  = n
+    if (p !== undefined) S.formData.phone = p
+    if (e !== undefined) S.formData.email = e
+    S.formData.stage = el.dataset.stage
+    S.stageMsg = STAGE_MESSAGES[el.dataset.stage] || null
+    render()
+  }
   else if (action === 'back-to-form') {
     S.welcomeBack = false
+    S.stageMsg = S.formData.stage ? STAGE_MESSAGES[S.formData.stage] : null
     S.view = 'customer-form'
     render()
   }
-  else if (action === 'go-customer') { S.view = 'customer-form'; render() }
+  else if (action === 'go-customer') {
+    if (!menuIsReady()) { S.showAbout = false; S.showMenuSoon = true; render(); return }
+    S.showMenuSoon = false
+    S.view = 'customer-form'; render()
+  }
+  else if (action === 'close-menusoon') { S.showMenuSoon = false; render() }
   else if (action === 'go-admin') { window.location.hash = 'admin'; S.view = 'admin-login'; render() }
 
   else if (action === 'toggle-day') {
@@ -1079,6 +1479,13 @@ document.addEventListener('click', async (e) => {
     if (S.sel.days.has(day)) {
       S.sel.days.delete(day)
       delete S.sel.choices[day]
+      // an add-on can't ride on a day that's no longer being delivered
+      Object.keys(S.sel.extras).forEach(id => {
+        const arr = S.sel.extras[id].days || []
+        const i = arr.indexOf(day)
+        if (i !== -1) arr.splice(i, 1)
+        if (!arr.length) delete S.sel.extras[id]
+      })
     } else {
       S.sel.days.add(day)
       // Default every category to its first option so the order is
@@ -1108,45 +1515,54 @@ document.addEventListener('click', async (e) => {
   else if (action === 'week-today') {
     S.adminWeek = weekStart(); await loadAllOrders(); await loadMenuForAdmin(); render()
   }
-  else if (action === 'extra-add') {
-    const id = el.dataset.id
-    S.sel.extras[id] = (S.sel.extras[id] || 0) + 1
-    render()
-  }
-  else if (action === 'extra-remove') {
-    const id = el.dataset.id
-    if ((S.sel.extras[id] || 0) > 0) S.sel.extras[id]--
+  else if (action === 'extra-day') {
+    const id = el.dataset.id, day = el.dataset.day
+    if (!S.sel.extras[id]) S.sel.extras[id] = { days: [] }
+    const arr = S.sel.extras[id].days
+    const i = arr.indexOf(day)
+    if (i === -1) arr.push(day); else arr.splice(i, 1)
+    if (!arr.length) delete S.sel.extras[id]
     render()
   }
 
   else if (action === 'customer-lookup') {
-    const name = document.getElementById('inp-name')?.value?.trim()
+    const name  = document.getElementById('inp-name')?.value?.trim()
     const phone = document.getElementById('inp-phone')?.value?.trim()
     const email = document.getElementById('inp-email')?.value?.trim()
+    const stage = S.formData.stage
     const digits = (phone || '').replace(/\D/g, '')
-    if (!name || name.length < 3) { S.error = 'Name must be at least 3 characters.'; render(); return }
-    if (!phone || digits.length < 10) { S.error = 'Please enter a valid phone number (at least 10 digits).'; render(); return }
+
+    // Save what they've typed BEFORE validating, so a failed check
+    // doesn't wipe the form on re-render.
+    S.formData = { name: name || '', phone: phone || '', email: email || '', stage: stage || '' }
+
+    if (!name || name.length < 3)        { S.error = 'Name must be at least 3 characters.'; render(); return }
+    if (!phone || digits.length < 10)    { S.error = 'Please enter a valid phone number (at least 10 digits).'; render(); return }
     if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { S.error = 'That email address doesn\'t look right.'; render(); return }
-    S.formData = { name, phone, email }
-    S.loading = true; S.customer = { name, phone, email }; render()
-    await checkExistingOrder(phone)
+    if (!stage)                          { S.error = 'Please tell us which stage you\'re at so we can tailor your meals.'; render(); return }
+
+    S.customer = { name, phone, email, stage }
+    S.loading = true; render()
+
+    const res = await lookupCustomer(phone)
     S.loading = false
-    if (S.existingOrder) { S.view = 'customer-existing'; render(); return }
-    // Returning customer? Prefill name and email from their last order.
-    const { data: pastOrders } = await db.from('orders')
-      .select('customer_name, customer_email')
-      .eq('customer_phone', phone)
-      .order('created_at', { ascending: false })
-      .limit(1)
-    if (pastOrders && pastOrders.length > 0) {
-      S.welcomeBack = true
-      S.formData.name = pastOrders[0].customer_name
-      S.customer.name = pastOrders[0].customer_name
-      if (!email && pastOrders[0].customer_email) {
-        S.formData.email = pastOrders[0].customer_email
-        S.customer.email = pastOrders[0].customer_email
+
+    if (res && res.found) {
+      S.history = res.history || []
+      // fill blanks from their profile, never overwrite what they just typed
+      if (!email && res.profile?.email) {
+        S.customer.email = res.profile.email
+        S.formData.email = res.profile.email
       }
+      if (res.current_order) {
+        S.existingOrder = res.current_order
+        S.view = 'customer-existing'; render(); return
+      }
+      S.welcomeBack = true
+    } else {
+      S.history = []
     }
+
     S.view = 'customer-menu'
     render()
   }
@@ -1154,7 +1570,24 @@ document.addEventListener('click', async (e) => {
   else if (action === 'submit-order') {
     const notes = document.getElementById('notes-field')
     if (notes) S.sel.notes = notes.value
+
+    // Email is required before an order can go through
+    const menuEmail = document.getElementById('inp-email-menu')?.value?.trim()
+    if (menuEmail) {
+      S.customer.email = menuEmail
+      S.formData.email = menuEmail
+    }
+    if (!S.customer.email) {
+      S.error = 'Please add your email so we can send your order confirmation.'
+      render()
+      document.getElementById('inp-email-menu')?.focus()
+      return
+    }
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(S.customer.email)) {
+      S.error = 'That email address doesn\'t look right.'; render(); return
+    }
     if (S.sel.days.size === 0) { S.error = 'Please select at least one delivery day.'; render(); return }
+
     S.loading = true; render()
     const ok = await submitOrder()
     S.loading = false
@@ -1233,21 +1666,47 @@ document.addEventListener('change', async (e) => {
   }
 })
 
-// Live phone lookup on input
-document.addEventListener('input', async (e) => {
+// Live phone lookup, debounced. Goes through the edge function so it
+// keeps working once RLS locks the orders table.
+let phoneTimer = null
+let lastLookedUp = ''
+
+document.addEventListener('input', (e) => {
   if (e.target.id !== 'inp-phone') return
-  const digits = e.target.value.replace(/\D/g, '')
-  if (digits.length >= 10) {
-    const { data } = await db.from('orders').select('customer_name').eq('customer_phone', e.target.value.trim()).limit(1)
-    const hint = document.getElementById('phone-hint')
-    if (hint && data && data.length > 0) {
-      const nameInp = document.getElementById('inp-name')
-      if (nameInp && !nameInp.value) nameInp.value = data[0].customer_name
-      hint.innerHTML = "<span style=\"color:var(--green);font-weight:500;\">👋 Welcome back, " + data[0].customer_name + "!</span>"
-    } else if (hint) {
-      hint.innerHTML = "At least 10 digits - we'll find your order next time"
-    }
+  const raw = e.target.value.trim()
+  const digits = raw.replace(/\D/g, '')
+  const hint = document.getElementById('phone-hint')
+
+  if (phoneTimer) clearTimeout(phoneTimer)
+
+  if (digits.length < 10) {
+    lastLookedUp = ''
+    if (hint) hint.innerHTML = "At least 10 digits - we'll find your order next time"
+    return
   }
+  if (digits === lastLookedUp) return
+
+  phoneTimer = setTimeout(async () => {
+    lastLookedUp = digits
+    const res = await lookupCustomer(raw)
+    const h = document.getElementById('phone-hint')
+    if (!h) return
+    if (res && res.found && res.profile) {
+      const nameInp  = document.getElementById('inp-name')
+      const emailInp = document.getElementById('inp-email')
+      if (nameInp  && !nameInp.value  && res.profile.name)  nameInp.value  = res.profile.name
+      if (emailInp && !emailInp.value && res.profile.email) emailInp.value = res.profile.email
+      if (res.profile.stage && !S.formData.stage) {
+        S.formData.stage = res.profile.stage
+        S.stageMsg = STAGE_MESSAGES[res.profile.stage] || null
+        render()
+        return
+      }
+      h.innerHTML = '<span style="color:var(--green);font-weight:500;">\u{1F44B} Welcome back, ' + (res.profile.name || 'friend') + '!</span>'
+    } else {
+      h.innerHTML = "At least 10 digits - we'll find your order next time"
+    }
+  }, 600)
 })
 
 // ================================================================
