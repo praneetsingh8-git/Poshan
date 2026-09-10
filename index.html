@@ -402,7 +402,11 @@ const CFG = {
   // and it does NOT change when you rename the function. This must match
   // the slug shown in the function's URL, not its display name.
   // Edge Functions -> customer-lookup -> the last part of its URL.
-  lookupFn:     'dynamic-task'
+  lookupFn:     'dynamic-task',
+
+  // Slug of the payment-notify Edge Function. Supabase auto-names
+  // functions on deploy, so put whatever appears in its URL here.
+  paymentFn:    'payment-notify'
 }
 
 // ================================================================
@@ -427,6 +431,9 @@ let S = {
   showHistory: false,
   showAbout: false,
   showMenuSoon: false,
+  editingExtra: null,
+  payModal: null,
+  orderFilter: 'all',
   pricing: null,
   orderType: 'plan',
   welcomeBack: false,
@@ -680,6 +687,66 @@ async function loadAllOrders() {
   const wk = S.adminWeek || weekStart()
   const { data } = await db.from('orders').select('*').eq('week_start', wk).order('created_at', { ascending: false })
   S.allOrders = data || []
+}
+
+async function loadExtrasAdmin() {
+  const { data } = await db.from('extras').select('*').order('sort_order').order('name')
+  S.extras = data || []
+}
+
+async function saveExtra(row) {
+  const payload = {
+    name:        row.name,
+    description: row.description || null,
+    price:       Number(row.price) || 0,
+    stages:      row.stages && row.stages.length ? row.stages : STAGES.map(s => s.key),
+    available:   !!row.available,
+    sort_order:  Number(row.sort_order) || 0
+  }
+  const res = row.id
+    ? await db.from('extras').update(payload).eq('id', row.id)
+    : await db.from('extras').insert(payload)
+  return !res.error
+}
+
+async function deleteExtra(id) {
+  const { error } = await db.from('extras').delete().eq('id', id)
+  return !error
+}
+
+// Record a payment. The database trigger updates the order's
+// status and paid amount from the sum of its payments.
+async function recordPayment(order, amount, note) {
+  const { error } = await db.from('payments').insert({
+    order_id:  order.id,
+    order_ref: order.order_ref,
+    amount:    Number(amount),
+    note:      note || null
+  })
+  return !error
+}
+
+async function customerRefFor(phone) {
+  const { data } = await db.from('customers').select('customer_ref').eq('phone', phone).maybeSingle()
+  return data?.customer_ref || ''
+}
+
+async function sendPaymentEmail(type, order) {
+  try {
+    const customer_ref = await customerRefFor(order.customer_phone)
+    const { data, error } = await db.functions.invoke(CFG.paymentFn, {
+      body: { type, order, customer_ref }
+    })
+    if (error) { console.error('payment email failed', error); return { ok: false } }
+    return data || { ok: false }
+  } catch (e) {
+    console.error('payment email threw', e)
+    return { ok: false }
+  }
+}
+
+async function markReminded(id) {
+  await db.from('orders').update({ reminded_at: new Date().toISOString() }).eq('id', id)
 }
 
 async function loadCustomers() {
@@ -1371,7 +1438,8 @@ function vAdminDashboard() {
       : tab === 'orders' ? adminOrdersTab()
       : tab === 'customers' ? adminCustomersTab()
       : adminExtrasTab()}
-  </div>`
+  </div>
+  ${vPayModal()}`
 }
 
 function adminMenuTab() {
@@ -1423,22 +1491,115 @@ function adminMenuTab() {
   </div>`
 }
 
+function payBadge(o) {
+  const m = { paid: 'badge-delivered', partial: 'badge-pending', unpaid: 'badge-pending' }
+  const label = { paid: 'Paid', partial: 'Part paid', unpaid: 'Unpaid' }
+  const st = o.payment_status || 'unpaid'
+  return `<span class="badge ${m[st]}">${label[st]}</span>`
+}
+
+function vPayModal() {
+  const o = S.payModal
+  if (!o) return ''
+  const due  = Number(o.amount_due) || 0
+  const paid = Number(o.amount_paid) || 0
+  const outstanding = Math.max(due - paid, 0)
+
+  return `
+  <div data-action="pay-close" style="position:fixed;inset:0;background:rgba(42,31,46,0.55);z-index:220;display:flex;align-items:center;justify-content:center;padding:22px;backdrop-filter:blur(3px);">
+    <div data-action="modal-noop" style="background:var(--white);width:100%;max-width:400px;border-radius:16px;padding:24px;">
+      <div style="font-family:'Cormorant Garamond',serif;font-size:21px;font-weight:500;margin-bottom:3px;">Record a payment</div>
+      <div style="font-size:12px;color:var(--text-light);font-family:monospace;margin-bottom:16px;">${o.order_ref || ''} \u00b7 ${o.customer_name}</div>
+
+      <div class="summary-box" style="margin-top:0;margin-bottom:16px;">
+        <div class="summary-row"><span>Order total</span><span>$${due.toFixed(2)}</span></div>
+        <div class="summary-row"><span>Already received</span><span>$${paid.toFixed(2)}</span></div>
+        <div class="summary-row total"><span>Outstanding</span><span>$${outstanding.toFixed(2)}</span></div>
+      </div>
+
+      ${S.error ? `<div class="alert alert-error">${S.error}</div>` : ''}
+
+      <div class="field">
+        <label>Amount received</label>
+        <input type="number" step="0.01" min="0" id="pay-amount" value="${outstanding.toFixed(2)}" />
+        <p class="field-hint">Defaults to the full outstanding amount</p>
+      </div>
+      <div class="field">
+        <label>Note (optional)</label>
+        <input type="text" id="pay-note" placeholder="e.g. e-Transfer ref 1234" />
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Email the customer</div>
+          <div class="toggle-sub">${o.customer_email || 'No email on file'}</div>
+        </div>
+        <button class="toggle ${S.payEmail !== false && o.customer_email ? 'on' : ''}" data-action="pay-email-toggle" ${o.customer_email ? '' : 'disabled'}></button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:16px;">
+        <button class="btn btn-primary btn-sm ${S.loading ? 'disabled' : ''}" data-action="pay-save" ${S.loading ? 'disabled' : ''} style="flex:1;">
+          ${S.loading ? 'Saving\u2026' : 'Record payment'}
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="pay-close">Cancel</button>
+      </div>
+    </div>
+  </div>`
+}
+
 function adminOrdersTab() {
-  if (!S.allOrders.length) return `<div class="empty"><div class="empty-icon">\u{1F4ED}</div><div class="empty-text">No orders for this week.</div></div>`
-  return `<div style="overflow-x:auto;">
+  const all = S.allOrders
+  const f = S.orderFilter
+  const rows = f === 'all' ? all : all.filter(o => (o.payment_status || 'unpaid') === f)
+
+  const counts = {
+    all:     all.length,
+    unpaid:  all.filter(o => (o.payment_status || 'unpaid') === 'unpaid').length,
+    partial: all.filter(o => o.payment_status === 'partial').length,
+    paid:    all.filter(o => o.payment_status === 'paid').length
+  }
+  const owed = all
+    .filter(o => (o.payment_status || 'unpaid') !== 'paid')
+    .reduce((s, o) => s + Math.max((Number(o.amount_due)||0) - (Number(o.amount_paid)||0), 0), 0)
+
+  const filters = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">
+      ${[['all','All'],['unpaid','Unpaid'],['partial','Part paid'],['paid','Paid']].map(([k,label]) => `
+        <button data-action="order-filter" data-filter="${k}"
+          style="border:1px solid ${f===k?'var(--pink-dark)':'var(--border)'};background:${f===k?'var(--pink-dark)':'var(--white)'};color:${f===k?'#fff':'var(--text-mid)'};border-radius:100px;padding:6px 13px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;">
+          ${label} (${counts[k]})
+        </button>`).join('')}
+      ${owed > 0 ? `<span style="margin-left:auto;font-size:12px;color:var(--pink-deep);font-weight:600;">$${owed.toFixed(2)} outstanding</span>` : ''}
+    </div>
+    ${counts.unpaid > 0 ? `<button class="btn btn-secondary btn-sm" data-action="remind-all" style="margin-bottom:14px;">
+      \u2709 Send reminders to all ${counts.unpaid} unpaid
+    </button>` : ''}`
+
+  if (!all.length) return filters + `<div class="empty"><div class="empty-icon">\u{1F4ED}</div><div class="empty-text">No orders for this week.</div></div>`
+  if (!rows.length) return filters + `<div class="empty"><div class="empty-text">No ${f} orders this week.</div></div>`
+
+  return filters + `<div style="overflow-x:auto;">
     <table class="orders-table">
       <thead><tr>
-        <th>Customer</th><th>Contact</th><th>Days &amp; dishes</th><th>Extras</th><th>Plan</th><th>Notes</th><th>Status</th>
+        <th>Order</th><th>Customer</th><th>Days &amp; dishes</th><th>Amount</th><th>Payment</th><th>Status</th>
       </tr></thead>
       <tbody>
-        ${S.allOrders.map(o => `<tr>
-          <td><strong>${o.customer_name}</strong></td>
-          <td style="font-size:12px;">
-            ${o.customer_phone}
-            ${o.customer_email ? `<div style="color:var(--text-light);font-size:11px;margin-top:2px;">${o.customer_email}</div>` : ''}
+        ${rows.map(o => {
+          const due=Number(o.amount_due)||0, paid=Number(o.amount_paid)||0
+          const outstanding=Math.max(due-paid,0)
+          return `<tr>
+          <td style="font-size:11px;font-family:monospace;color:var(--text-mid);white-space:nowrap;">
+            ${o.order_ref || ''}
+            ${o.order_type === 'sample' ? '<div><span class="badge badge-pending" style="margin-top:3px;">Sample</span></div>' : ''}
           </td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:5px;">
+            <strong>${o.customer_name}</strong>
+            <div style="font-size:11px;color:var(--text-light);margin-top:2px;">${o.customer_phone}</div>
+            ${o.customer_email ? `<div style="font-size:11px;color:var(--text-light);">${o.customer_email}</div>` : ''}
+            ${o.stage ? `<div style="margin-top:3px;"><span class="day-chip">${stageLabel(o.stage)}</span></div>` : ''}
+          </td>
+          <td>
+            <div style="display:flex;flex-direction:column;gap:4px;">
               ${(o.delivery_days||[]).map(raw => {
                 const { day, picks } = decodeDay(raw)
                 const txt = picksText(picks)
@@ -1447,11 +1608,24 @@ function adminOrdersTab() {
                   ${txt ? `<span style="color:var(--text-mid);margin-left:6px;">${txt}</span>` : ''}
                 </div>`
               }).join('')}
+              ${(o.extras||[]).filter(e=>e.qty>0).length ? `<div style="font-size:11px;color:var(--text-light);margin-top:2px;">
+                ${(o.extras||[]).filter(e=>e.qty>0).map(e=>e.name + (e.days ? ' ('+e.days.map(d=>DAY_LABELS[d]?DAY_LABELS[d].slice(0,3):d).join(', ')+')' : '')).join(', ')}
+              </div>` : ''}
             </div>
           </td>
-          <td style="font-size:12px;">${(o.extras||[]).filter(e=>e.qty>0).map(e=>`${e.name}\u00d7${e.qty}`).join(', ') || '\u2014'}</td>
-          <td>${o.pregnancy_plan ? '<span class="pregnancy-badge">\u{1F338} Pregnancy</span>' : '\u2014'}</td>
-          <td style="max-width:150px;font-size:12px;">${o.notes || '\u2014'}</td>
+          <td style="white-space:nowrap;font-size:12px;">
+            <div style="font-weight:600;color:var(--text);">$${due.toFixed(2)}</div>
+            ${paid > 0 ? `<div style="color:var(--green);font-size:11px;">paid $${paid.toFixed(2)}</div>` : ''}
+            ${outstanding > 0 && paid > 0 ? `<div style="color:var(--amber);font-size:11px;">owes $${outstanding.toFixed(2)}</div>` : ''}
+          </td>
+          <td style="white-space:nowrap;">
+            ${payBadge(o)}
+            <div style="display:flex;gap:5px;margin-top:6px;">
+              ${outstanding > 0 ? `<button class="btn btn-primary btn-sm" data-action="pay-open" data-id="${o.id}" style="padding:5px 11px;font-size:11px;">Record</button>` : ''}
+              ${outstanding > 0 && o.customer_email ? `<button class="btn btn-ghost btn-sm" data-action="remind-one" data-id="${o.id}" style="padding:5px 11px;font-size:11px;">Remind</button>` : ''}
+            </div>
+            ${o.reminded_at ? `<div style="font-size:10px;color:var(--text-light);margin-top:4px;">reminded ${String(o.reminded_at).slice(0,10)}</div>` : ''}
+          </td>
           <td>
             <select class="status-select" data-action="update-status" data-id="${o.id}">
               <option value="pending" ${o.status==='pending'?'selected':''}>Pending</option>
@@ -1459,7 +1633,7 @@ function adminOrdersTab() {
               <option value="delivered" ${o.status==='delivered'?'selected':''}>Delivered</option>
             </select>
           </td>
-        </tr>`).join('')}
+        </tr>`}).join('')}
       </tbody>
     </table>
   </div>`
@@ -1496,17 +1670,98 @@ function adminCustomersTab() {
 }
 
 function adminExtrasTab() {
+  const e = S.editingExtra
+
+  const form = e ? `
+    <div class="card" style="border-color:var(--pink-dark);margin-bottom:16px;">
+      <div class="card-label">${e.id ? 'Edit add-on' : 'New add-on'}</div>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="ex-name" value="${(e.name || '').replace(/"/g,'&quot;')}" placeholder="e.g. Coconut Water" />
+      </div>
+      <div class="field">
+        <label>Description</label>
+        <input type="text" id="ex-desc" value="${(e.description || '').replace(/"/g,'&quot;')}" placeholder="e.g. fresh green coconut" />
+      </div>
+      <div class="input-row">
+        <div class="mini-field">
+          <label>Price per day ($)</label>
+          <input type="number" step="0.01" min="0" id="ex-price" value="${e.price ?? 0}" />
+        </div>
+        <div class="mini-field">
+          <label>Sort order</label>
+          <input type="number" id="ex-sort" value="${e.sort_order ?? 0}" />
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:14px;">
+        <label>Show for which stages</label>
+        <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:6px;">
+          ${STAGES.map(s => {
+            const on = (e.stages || []).includes(s.key)
+            return `<button data-action="ex-stage" data-stage="${s.key}"
+              style="border:1px solid ${on ? 'var(--pink-dark)' : 'var(--border)'};background:${on ? 'var(--pink-dark)' : 'var(--white)'};color:${on ? '#fff' : 'var(--text-mid)'};border-radius:100px;padding:7px 14px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;">
+              ${s.icon} ${s.label}
+            </button>`
+          }).join('')}
+        </div>
+        <p class="field-hint">Leave all unticked to show it to everyone.</p>
+      </div>
+
+      <div class="toggle-row">
+        <div>
+          <div class="toggle-label">Available to order</div>
+          <div class="toggle-sub">Turn off to hide without deleting</div>
+        </div>
+        <button class="toggle ${e.available ? 'on' : ''}" data-action="ex-available"></button>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:14px;">
+        <button class="btn btn-primary btn-sm" data-action="ex-save" style="flex:1;">
+          ${S.loading ? 'Saving\u2026' : 'Save add-on'}
+        </button>
+        <button class="btn btn-ghost btn-sm" data-action="ex-cancel">Cancel</button>
+      </div>
+    </div>` : `
+    <button class="btn btn-primary btn-full" data-action="ex-new" style="margin-bottom:16px;">+ New add-on</button>`
+
+  const list = S.extras.length ? `
+    <div class="extras-grid">
+      ${S.extras.map(x => `
+        <div class="extra-row" style="flex-direction:column;align-items:stretch;gap:0;${x.available ? '' : 'opacity:0.55;'}">
+          <div style="display:flex;align-items:flex-start;gap:12px;">
+            <div class="extra-info">
+              <div class="extra-name">${x.name}</div>
+              ${x.description ? `<div class="extra-desc">${x.description}</div>` : ''}
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div class="extra-price">${x.price > 0 ? '$' + Number(x.price).toFixed(2) : 'Free'}</div>
+              <div style="font-size:10px;color:var(--text-light);">per day</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:9px;">
+            ${(x.stages && x.stages.length ? x.stages : STAGES.map(s=>s.key)).map(k => {
+              const s = STAGES.find(v => v.key === k)
+              return `<span class="day-chip">${s ? s.label : k}</span>`
+            }).join('')}
+            ${x.available ? '' : '<span class="badge badge-pending">Hidden</span>'}
+          </div>
+          <div style="display:flex;gap:7px;margin-top:11px;">
+            <button class="btn btn-ghost btn-sm" data-action="ex-edit" data-id="${x.id}">Edit</button>
+            <button class="btn btn-danger btn-sm" data-action="ex-delete" data-id="${x.id}">Delete</button>
+          </div>
+        </div>`).join('')}
+    </div>` : `<div class="empty"><div class="empty-icon">\u2728</div><div class="empty-text">No add-ons yet.</div></div>`
+
   return `<div>
-    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">Manage extras in your Supabase dashboard under the <strong>extras</strong> table. Changes reflect here automatically.</p>
-    ${S.extras.length ? `<div class="extras-grid">
-      ${S.extras.map(ex => `<div class="extra-row">
-        <div class="extra-info"><div class="extra-name">${ex.name}</div>${ex.description ? `<div class="extra-desc">${ex.description}</div>` : ''}</div>
-        <div class="extra-price">${ex.price > 0 ? `$${ex.price.toFixed(2)}` : 'Free'}</div>
-        <span class="badge ${ex.available ? 'badge-confirmed' : 'badge-pending'}">${ex.available ? 'Live' : 'Hidden'}</span>
-      </div>`).join('')}
-    </div>` : `<div class="empty"><div class="empty-icon">✨</div><div class="empty-text">No extras yet. Add them in Supabase.</div></div>`}
+    <p style="font-size:13px;color:var(--text-mid);margin-bottom:16px;">
+      Add-ons are priced per delivery day. Tag them by stage so customers only see what suits them.
+    </p>
+    ${form}
+    ${list}
   </div>`
 }
+
 
 // ================================================================
 // RENDER
@@ -1595,6 +1850,114 @@ document.addEventListener('click', async (e) => {
     const notes = document.getElementById('notes-field')
     if (notes) S.sel.notes = notes.value
     S.sel.pregnancy = !S.sel.pregnancy
+    render()
+  }
+
+  // ---- Add-on manager ----
+  else if (action === 'ex-new') {
+    S.editingExtra = { name:'', description:'', price:0, stages: STAGES.map(s=>s.key), available:true, sort_order:0 }
+    S.error = null; render()
+  }
+  else if (action === 'ex-edit') {
+    const x = S.extras.find(v => v.id === el.dataset.id)
+    if (x) S.editingExtra = { ...x, stages: x.stages || STAGES.map(s=>s.key) }
+    S.error = null; render()
+  }
+  else if (action === 'ex-cancel') { S.editingExtra = null; S.error = null; render() }
+  else if (action === 'ex-stage') {
+    const k = el.dataset.stage
+    const arr = S.editingExtra.stages || []
+    const i = arr.indexOf(k)
+    if (i === -1) arr.push(k); else arr.splice(i, 1)
+    S.editingExtra.stages = arr
+    render()
+  }
+  else if (action === 'ex-available') {
+    S.editingExtra.available = !S.editingExtra.available
+    render()
+  }
+  else if (action === 'ex-save') {
+    const row = {
+      ...S.editingExtra,
+      name:        document.getElementById('ex-name')?.value?.trim(),
+      description: document.getElementById('ex-desc')?.value?.trim(),
+      price:       document.getElementById('ex-price')?.value,
+      sort_order:  document.getElementById('ex-sort')?.value
+    }
+    if (!row.name) { S.error = 'Please give the add-on a name.'; render(); return }
+    S.loading = true; render()
+    const ok = await saveExtra(row)
+    await loadExtrasAdmin()
+    S.loading = false
+    if (ok) { S.editingExtra = null; S.msg = '\u2713 Add-on saved' } else { S.error = 'Could not save. Please try again.' }
+    render()
+  }
+  else if (action === 'ex-delete') {
+    const x = S.extras.find(v => v.id === el.dataset.id)
+    if (!confirm(`Delete "${x ? x.name : 'this add-on'}"? Past orders keep their record of it.`)) return
+    S.loading = true; render()
+    const ok = await deleteExtra(el.dataset.id)
+    await loadExtrasAdmin()
+    S.loading = false
+    S.msg = ok ? '\u2713 Add-on deleted' : ''
+    if (!ok) S.error = 'Could not delete.'
+    render()
+  }
+
+  // ---- Payments ----
+  else if (action === 'order-filter') { S.orderFilter = el.dataset.filter; render() }
+  else if (action === 'pay-open') {
+    S.payModal = S.allOrders.find(o => o.id === el.dataset.id) || null
+    S.payEmail = true; S.error = null; render()
+  }
+  else if (action === 'pay-close') { S.payModal = null; S.error = null; render() }
+  else if (action === 'pay-email-toggle') { S.payEmail = !S.payEmail; render() }
+  else if (action === 'pay-save') {
+    const amt  = parseFloat(document.getElementById('pay-amount')?.value)
+    const note = document.getElementById('pay-note')?.value?.trim()
+    if (!amt || amt <= 0) { S.error = 'Enter an amount greater than zero.'; render(); return }
+    const order = S.payModal
+    S.loading = true; render()
+    const ok = await recordPayment(order, amt, note)
+    if (!ok) { S.loading = false; S.error = 'Could not record the payment.'; render(); return }
+
+    await loadAllOrders()
+    // re-read the order so the email quotes the updated totals
+    const updated = S.allOrders.find(o => o.id === order.id) || order
+    let emailNote = ''
+    if (S.payEmail && updated.customer_email) {
+      const r = await sendPaymentEmail('receipt', updated)
+      emailNote = r.ok ? ' and receipt emailed' : ' (payment saved, but the email failed)'
+    }
+    S.loading = false; S.payModal = null
+    S.msg = `\u2713 Payment recorded${emailNote}`
+    render()
+  }
+  else if (action === 'remind-one') {
+    const o = S.allOrders.find(v => v.id === el.dataset.id)
+    if (!o) return
+    S.loading = true; render()
+    const r = await sendPaymentEmail('reminder', o)
+    if (r.ok) await markReminded(o.id)
+    await loadAllOrders()
+    S.loading = false
+    S.msg = r.ok ? `\u2713 Reminder sent to ${o.customer_name}` : ''
+    if (!r.ok) S.error = r.reason === 'no_email' ? 'That customer has no email on file.' : 'Could not send the reminder.'
+    render()
+  }
+  else if (action === 'remind-all') {
+    const unpaid = S.allOrders.filter(o => (o.payment_status || 'unpaid') !== 'paid' && o.customer_email)
+    if (!unpaid.length) { S.error = 'No unpaid orders with an email on file.'; render(); return }
+    if (!confirm(`Send a payment reminder to ${unpaid.length} customer${unpaid.length>1?'s':''}?`)) return
+    S.loading = true; render()
+    let sent = 0
+    for (const o of unpaid) {
+      const r = await sendPaymentEmail('reminder', o)
+      if (r.ok) { sent++; await markReminded(o.id) }
+    }
+    await loadAllOrders()
+    S.loading = false
+    S.msg = `\u2713 ${sent} of ${unpaid.length} reminders sent`
     render()
   }
 
@@ -1735,6 +2098,8 @@ document.addEventListener('click', async (e) => {
     if (S.adminTab === 'orders')    await loadAllOrders()
     if (S.adminTab === 'customers') await loadCustomers()
     if (S.adminTab === 'menu')      await loadMenuForAdmin()
+    if (S.adminTab === 'extras')    await loadExtrasAdmin()
+    S.editingExtra = null
     render()
   }
 
