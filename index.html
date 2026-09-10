@@ -563,6 +563,9 @@ function dayCategories(entry) {
 
 function dayHasMenu(entry) { return dayCategories(entry).length > 0 }
 
+// Selected days in week order, never the order they were clicked
+function selectedDaysInOrder() { return DAYS.filter(d => S.sel.days.has(d)) }
+
 // "monday:iron=Palak Paneer|protein=Rajma"
 function encodeDay(day, picks) {
   const parts = Object.entries(picks || {}).filter(([,v]) => v).map(([k,v]) => k + '=' + v)
@@ -636,7 +639,7 @@ async function submitOrder() {
       }
     })
 
-  const daysEncoded = [...S.sel.days].map(d => encodeDay(d, S.sel.choices[d]))
+  const daysEncoded = selectedDaysInOrder().map(d => encodeDay(d, S.sel.choices[d]))
 
   const { data, error } = await db.from('orders').insert({
     customer_name:  S.customer.name,
@@ -1057,7 +1060,7 @@ function vCustomerMenu() {
       </div>
     </div>`
 
-  const selDays = [...S.sel.days]
+  const selDays = selectedDaysInOrder()
   const visibleExtras = S.extras.filter(ex => extraAppliesTo(ex, S.customer?.stage))
 
   const extrasHtml = visibleExtras.length ? `
@@ -1288,7 +1291,7 @@ function vCustomerExisting() {
 }
 
 function vCustomerSuccess() {
-  const days = [...S.sel.days].map(d => DAY_LABELS[d] || cap(d)).join(', ')
+  const days = selectedDaysInOrder().map(d => DAY_LABELS[d] || cap(d)).join(', ')
   return `
   ${vHeader(false)}
   <div class="page">
